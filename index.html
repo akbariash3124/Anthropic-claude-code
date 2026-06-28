@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#0f172a" />
-  <title>Overload — AI Progressive Overload Coach</title>
+  <title>Overload — Adaptive Progressive-Overload Trainer</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -14,7 +14,7 @@
       <h1>Overload</h1>
     </div>
     <nav class="tabs" id="tabs">
-      <button class="tab active" data-view="strength">Calibrate</button>
+      <button class="tab active" data-view="calibrate">Calibrate</button>
       <button class="tab" data-view="train">Train</button>
       <button class="tab" data-view="progress">Progress</button>
     </nav>
@@ -31,40 +31,25 @@
   </header>
 
   <main id="app">
-    <!-- ===================== CALIBRATE VIEW ===================== -->
-    <section id="view-strength" class="view active">
+    <!-- ===================== CALIBRATE ===================== -->
+    <section id="view-calibrate" class="view active">
       <div class="panel">
-        <div class="panel-head">
-          <h2>Your profile</h2>
-          <span class="muted" id="profileStatus"></span>
-        </div>
+        <div class="panel-head"><h2>Your profile</h2><span class="muted" id="profileStatus"></span></div>
         <p class="lead">
-          Overload tailors every workout to your body and your real, measured strength.
-          Start with the basics.
+          Height &amp; weight are weak predictors — used only for sanity bounds, not to pick your loads.
+          Your real strength comes from calibration below.
         </p>
         <form id="profileForm" class="row">
-          <label class="field">
-            <span>Height (cm)</span>
-            <input type="number" id="profHeight" step="1" min="0" placeholder="175" />
+          <label class="field"><span>Height</span>
+            <span class="ht"><input type="number" id="profFt" min="0" step="1" placeholder="5" /><i>ft</i>
+            <input type="number" id="profIn" min="0" max="11" step="1" placeholder="10" /><i>in</i></span>
           </label>
-          <label class="field">
-            <span>Bodyweight</span>
-            <input type="number" id="profWeight" step="0.5" min="0" placeholder="0" />
-          </label>
-          <label class="field">
-            <span>Sex</span>
-            <select id="profSex">
-              <option value="">—</option>
-              <option>Male</option>
-              <option>Female</option>
-            </select>
-          </label>
-          <label class="field">
-            <span>Experience</span>
-            <select id="profExp">
-              <option>Beginner</option>
-              <option>Intermediate</option>
-              <option>Advanced</option>
+          <label class="field"><span>Bodyweight (lb)</span><input type="number" id="profWeight" step="1" min="0" placeholder="180" /></label>
+          <label class="field"><span>Goal</span>
+            <select id="profMode">
+              <option value="strength">Strength (4–6)</option>
+              <option value="hypertrophy" selected>Hypertrophy (8–12)</option>
+              <option value="endurance">Endurance (12–15)</option>
             </select>
           </label>
           <button type="submit" class="btn primary">Save</button>
@@ -72,14 +57,11 @@
       </div>
 
       <div class="panel">
-        <div class="panel-head">
-          <h2>Calibration program</h2>
-          <span class="muted" id="calibCount"></span>
-        </div>
+        <div class="panel-head"><h2>Calibration</h2><span class="muted" id="calibCount"></span></div>
         <p class="lead">
-          Do each standard lift <b>to failure</b> — one all-out set at a weight you choose.
-          Work through all six and Overload maps your whole-body strength, so it can program
-          <em>any</em> exercise you throw at it. Retest anytime to recalibrate.
+          Test one lift per movement pattern — a top set of <b>5–8 reps</b> at a known
+          reps-in-reserve. Each gives a trusted 1-rep-max estimate for that pattern. Once all six
+          are in, <em>every</em> exercise (even one you photograph) is prescribable. Retest anytime.
         </p>
         <div id="calibProgress" class="calib-progress"></div>
         <div id="calibList" class="calib-list"></div>
@@ -87,38 +69,45 @@
       </div>
     </section>
 
-    <!-- ===================== TRAIN VIEW ===================== -->
+    <!-- ===================== TRAIN ===================== -->
     <section id="view-train" class="view">
       <div class="panel">
-        <div class="panel-head">
-          <h2>Build today's workout</h2>
-        </div>
+        <div class="panel-head"><h2>Pick an exercise</h2></div>
 
         <div class="row">
-          <label class="field">
-            <span>Muscle group</span>
-            <select id="trainGroup"></select>
-          </label>
           <label class="field grow">
-            <span>Exercise (any)</span>
-            <input type="text" id="trainExercise" placeholder="e.g. Arnold Press, Lateral Raise…" />
+            <span>From your library</span>
+            <select id="exSelect"></select>
           </label>
-          <button id="generateBtn" class="btn primary">✦ Generate plan</button>
+          <label class="field">
+            <span>Goal</span>
+            <select id="trainMode">
+              <option value="strength">Strength</option>
+              <option value="hypertrophy">Hypertrophy</option>
+              <option value="endurance">Endurance</option>
+            </select>
+          </label>
         </div>
-        <p class="hint" id="trainStatus"></p>
 
-        <div id="planCard" class="plan-card hidden"></div>
+        <div class="identify-box">
+          <div class="muted small">Not in the list? Add any exercise or machine — type it or snap a photo:</div>
+          <div class="row">
+            <label class="field grow"><span>Name or hint</span><input type="text" id="exType" placeholder="e.g. Hammer Strength iso row" /></label>
+            <button id="photoBtn" class="btn ghost" type="button">📷 Photo</button>
+            <button id="identifyBtn" class="btn primary" type="button">Identify</button>
+          </div>
+          <p class="hint" id="identifyStatus"></p>
+          <div id="identifyResult" class="identify-result hidden"></div>
+        </div>
       </div>
 
-      <div class="panel hidden" id="logPanel">
-        <div class="panel-head">
-          <h2>Log what you actually did</h2>
-          <span class="muted" id="logExerciseName"></span>
-        </div>
+      <div class="panel hidden" id="prescribePanel">
+        <div class="panel-head"><h2 id="rxExercise">Today's set</h2><span class="muted" id="rxMeta"></span></div>
+        <div id="prescribeCard"></div>
         <ul id="logSets" class="log-sets"></ul>
-        <div class="panel-actions">
-          <button id="saveSessionBtn" class="btn success">Save session</button>
-          <button id="discardPlanBtn" class="btn ghost">Discard</button>
+        <div class="panel-actions" id="logActions">
+          <button id="addSetBtn" class="btn ghost" type="button">+ set</button>
+          <button id="saveSessionBtn" class="btn success" type="button">Save session</button>
         </div>
       </div>
 
@@ -128,22 +117,18 @@
       </div>
     </section>
 
-    <!-- ===================== PROGRESS VIEW ===================== -->
+    <!-- ===================== PROGRESS ===================== -->
     <section id="view-progress" class="view">
       <div class="panel">
         <div class="panel-head">
           <h2>Progress</h2>
-          <label class="field">
-            <span>Exercise</span>
-            <select id="progressExercise"></select>
-          </label>
+          <label class="field"><span>Exercise</span><select id="progressExercise"></select></label>
         </div>
         <div class="stats" id="progressStats"></div>
         <div class="chart-wrap">
           <div class="chart-tabs">
             <button class="chip active" data-metric="e1rm">Est. 1RM</button>
             <button class="chip" data-metric="volume">Volume</button>
-            <button class="chip" data-metric="topset">Top set</button>
           </div>
           <div id="chart"></div>
         </div>
@@ -155,45 +140,31 @@
   <!-- ===================== SETTINGS MODAL ===================== -->
   <div id="settingsModal" class="modal hidden">
     <div class="modal-card">
-      <div class="panel-head">
-        <h2>AI settings</h2>
-        <button id="closeSettings" class="icon-btn" aria-label="Close">✕</button>
-      </div>
+      <div class="panel-head"><h2>AI settings</h2><button id="closeSettings" class="icon-btn" aria-label="Close">✕</button></div>
       <p class="lead">
-        Overload uses Claude to design your workouts. Paste an
-        <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">Anthropic API key</a>.
-        It's stored only in this browser (localStorage) and sent directly to Anthropic — never to any other server.
+        AI is used <b>only</b> to identify exercises &amp; machines (from a name or photo). All weights and
+        reps are computed by a deterministic engine — never the AI. Paste an
+        <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">Anthropic API key</a>;
+        it's stored only in this browser and sent directly to Anthropic.
       </p>
-      <label class="field grow">
-        <span>Anthropic API key</span>
-        <input type="password" id="apiKeyInput" placeholder="sk-ant-..." autocomplete="off" />
+      <label class="field grow"><span>Anthropic API key</span><input type="password" id="apiKeyInput" placeholder="sk-ant-..." autocomplete="off" /></label>
+      <label class="field"><span>Model</span>
+        <select id="modelSelect">
+          <option value="claude-opus-4-8">Claude Opus 4.8 (best vision)</option>
+          <option value="claude-sonnet-4-6">Claude Sonnet 4.6 (faster)</option>
+        </select>
       </label>
-      <div class="row">
-        <label class="field">
-          <span>Units</span>
-          <select id="unitSelect">
-            <option value="kg">kg</option>
-            <option value="lb">lb</option>
-          </select>
-        </label>
-        <label class="field">
-          <span>Model</span>
-          <select id="modelSelect">
-            <option value="claude-opus-4-8">Claude Opus 4.8 (best)</option>
-            <option value="claude-sonnet-4-6">Claude Sonnet 4.6 (faster)</option>
-            <option value="claude-haiku-4-5">Claude Haiku 4.5 (fastest)</option>
-          </select>
-        </label>
-      </div>
-      <div class="panel-actions">
-        <button id="saveSettings" class="btn primary">Save</button>
-      </div>
+      <div class="panel-actions"><button id="saveSettings" class="btn primary">Save</button></div>
     </div>
   </div>
 
   <input type="file" id="importFile" accept="application/json" class="hidden" />
+  <input type="file" id="photoInput" accept="image/*" capture="environment" class="hidden" />
   <div id="toast" class="toast hidden"></div>
 
+  <script src="engine.js"></script>
+  <script src="data.js"></script>
+  <script src="recognize.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
