@@ -24,6 +24,8 @@
         <button id="keyBannerBtn">Connect →</button>
       </div>
 
+      <div id="focusRec" class="focus-rec hidden"></div>
+
       <div class="segmented" id="modeSeg">
         <button class="seg active" data-mode="single">One exercise</button>
         <button class="seg" data-mode="plan">Plan my session</button>
@@ -59,6 +61,16 @@
 
       <div id="status" class="status hidden"></div>
       <div id="result" class="result"></div>
+
+      <div id="addExWrap" class="addex-wrap hidden">
+        <div class="addex-label">Add another exercise or machine</div>
+        <div class="bigfield">
+          <input type="text" id="addExInput" placeholder="type a name, or snap the machine →" autocomplete="off" />
+          <button id="addExCam" class="iconbtn" title="Photo" aria-label="Photo">📷</button>
+        </div>
+        <div id="addExPhoto" class="photo-chip hidden"></div>
+        <button id="addExGo" class="cta small">＋ Add to workout</button>
+      </div>
     </section>
 
     <!-- ===================== HISTORY ===================== -->
@@ -94,6 +106,7 @@
         <div class="field"><span>Goal</span>
           <div class="chips small" id="meGoal"><button class="chip" data-v="Build muscle">Build muscle</button><button class="chip" data-v="Get stronger">Get stronger</button><button class="chip" data-v="Endurance">Endurance</button></div>
         </div>
+        <label class="field"><span>Your goals, in your words</span><textarea id="meNotes" rows="3" placeholder="e.g. build bigger arms and chest, keep my conditioning up, easy on my right shoulder…"></textarea></label>
         <label class="field"><span>Lifts you know (optional)</span><input type="text" id="meKnown" placeholder="e.g. bench 135x8, squat 225x5" /></label>
         <button id="saveMe" class="cta small">Save</button>
       </div>
@@ -134,9 +147,12 @@
   </div>
 
   <input type="file" id="photoInput" accept="image/*" capture="environment" class="hidden" />
+  <input type="file" id="addExPhotoInput" accept="image/*" capture="environment" class="hidden" />
   <input type="file" id="importFile" accept="application/json" class="hidden" />
+  <div id="restTimer" class="rest-timer hidden"><span id="restLabel">Rest</span> <b id="restCount">1:30</b><button id="restSkip" aria-label="Dismiss">✕</button></div>
   <div id="toast" class="toast hidden"></div>
 
+  <script src="config.js"></script>
   <script src="ai.js"></script>
   <script src="app.js"></script>
 </body>

@@ -186,3 +186,46 @@ body { background: radial-gradient(1000px 500px at 100% -5%, #1b2444 0%, var(--b
 .redial:disabled { opacity: .6; cursor: default; }
 .redial-hint { font-size: 12px; color: var(--warn); margin: 8px 2px 0; }
 .regen { background: var(--card2); border: 1px solid var(--line); color: var(--muted); border-radius: 10px; width: 46px; font-size: 17px; cursor: pointer; }
+
+/* today's focus recommendation */
+.focus-rec { border-radius: var(--radius); padding: 16px; margin-bottom: 16px;
+  background: linear-gradient(135deg, rgba(139,109,255,.18), rgba(51,214,192,.12)); border: 1px solid rgba(139,109,255,.35); }
+.focus-rec .fr-top { display: flex; align-items: center; justify-content: space-between; }
+.focus-rec .fr-kicker { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); font-weight: 800; }
+.focus-rec .fr-refresh { background: none; border: none; color: var(--muted); font-size: 16px; cursor: pointer; }
+.focus-rec h3 { margin: 4px 0 6px; font-size: 20px; }
+.focus-rec p { margin: 0 0 12px; font-size: 13.5px; line-height: 1.5; color: var(--text); }
+.focus-rec .fr-focus { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.focus-rec .fr-focus button { background: linear-gradient(135deg, var(--primary), var(--primary2)); border: none; color: #fff; font-weight: 800; padding: 10px 16px; border-radius: 999px; font-size: 14px; cursor: pointer; }
+.focus-rec .fr-status { display: flex; flex-wrap: wrap; gap: 6px; }
+.mstatus { font-size: 11.5px; padding: 4px 9px; border-radius: 999px; border: 1px solid var(--line); display: inline-flex; align-items: center; gap: 5px; }
+.mstatus b { font-weight: 700; }
+.mstatus .dot { width: 7px; height: 7px; border-radius: 50%; }
+.mstatus .dot.ready { background: var(--good); } .mstatus .dot.recovering { background: var(--warn); } .mstatus .dot.overdue { background: var(--bad); }
+
+/* add-exercise mid-workout */
+.addex-wrap { margin-top: 18px; padding: 16px; border: 1px dashed var(--line); border-radius: 16px; background: var(--card); }
+.addex-label { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); font-weight: 700; margin-bottom: 10px; }
+.addex-wrap .bigfield { border-color: var(--line); }
+.addex-wrap .cta.small { margin-top: 12px; }
+
+/* rest timer */
+.rest-timer { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(84px + env(safe-area-inset-bottom));
+  background: linear-gradient(135deg, var(--primary), var(--primary2)); color: #fff; border-radius: 999px; padding: 10px 14px 10px 18px;
+  display: flex; align-items: center; gap: 10px; box-shadow: var(--shadow); z-index: 45; font-size: 14px; font-weight: 700; }
+.rest-timer b { font-variant-numeric: tabular-nums; font-size: 16px; }
+.rest-timer button { background: rgba(255,255,255,.22); border: none; color: #fff; width: 26px; height: 26px; border-radius: 50%; cursor: pointer; }
+.rest-timer.done { background: var(--good); color: #05230f; }
+
+textarea { background: var(--bg); border: 1px solid var(--line); color: var(--text); border-radius: 11px; padding: 13px; font-size: 15px; font-family: inherit; outline: none; resize: vertical; }
+
+/* PR badge */
+.pr { background: rgba(251,191,36,.2); color: var(--warn); border: 1px solid rgba(251,191,36,.4); font-weight: 800; }
+
+/* week summary */
+.weeksum { display: flex; align-items: center; gap: 16px; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; margin-bottom: 12px; }
+.weeksum > div { display: flex; flex-direction: column; }
+.weeksum b { font-size: 20px; font-weight: 800; }
+.weeksum span { font-size: 11px; color: var(--muted); }
+.weeksum .ws-muscles { flex-direction: row; flex-wrap: wrap; gap: 5px; margin-left: auto; }
+.weeksum .ws-muscles span { background: var(--card2); border: 1px solid var(--line); border-radius: 999px; padding: 4px 9px; font-size: 11px; color: var(--text); text-transform: capitalize; }

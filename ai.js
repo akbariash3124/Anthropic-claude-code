@@ -27,11 +27,36 @@ const AI = (function () {
       warmup: { type: "array", items: SET },
       workingSets: { type: "array", items: SET },
       estimatedOneRepMax: { type: "number", description: "Your best estimate of the user's 1RM on this lift, lb (0 if bodyweight)." },
+      restSeconds: { type: "integer", description: "Recommended rest between working sets, seconds." },
       rationale: { type: "string", description: "One or two sentences, referencing their profile/history/feeler." },
       cues: { type: "array", items: { type: "string" }, description: "1-3 short form cues." },
       readiness: { type: "string", enum: ["confident", "estimate", "needs_feeler"] },
     },
-    required: ["resolvedName", "muscleGroup", "equipment", "perHand", "warmup", "workingSets", "estimatedOneRepMax", "rationale", "cues", "readiness"],
+    required: ["resolvedName", "muscleGroup", "equipment", "perHand", "warmup", "workingSets", "estimatedOneRepMax", "restSeconds", "rationale", "cues", "readiness"],
+    additionalProperties: false,
+  };
+
+  const RECOMMEND_SCHEMA = {
+    type: "object",
+    properties: {
+      recommendedFocus: { type: "array", items: { type: "string" }, description: "Body parts / split to train today (1-3)." },
+      headline: { type: "string", description: "Short punchy call, e.g. 'Push day — chest is fresh'." },
+      rationale: { type: "string", description: "2-3 sentences on why, referencing recovery, frequency, balance, and the goal." },
+      muscleStatus: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            muscle: { type: "string" },
+            status: { type: "string", enum: ["ready", "recovering", "overdue"] },
+            lastTrained: { type: "string", description: "e.g. '2 days ago' or 'not logged'." },
+          },
+          required: ["muscle", "status", "lastTrained"],
+          additionalProperties: false,
+        },
+      },
+    },
+    required: ["recommendedFocus", "headline", "rationale", "muscleStatus"],
     additionalProperties: false,
   };
 
@@ -52,9 +77,10 @@ const AI = (function () {
             warmup: { type: "array", items: SET },
             workingSets: { type: "array", items: SET },
             estimatedOneRepMax: { type: "number" },
+            restSeconds: { type: "integer" },
             cues: { type: "array", items: { type: "string" } },
           },
-          required: ["resolvedName", "muscleGroup", "equipment", "perHand", "warmup", "workingSets", "estimatedOneRepMax", "cues"],
+          required: ["resolvedName", "muscleGroup", "equipment", "perHand", "warmup", "workingSets", "estimatedOneRepMax", "restSeconds", "cues"],
           additionalProperties: false,
         },
       },
@@ -79,10 +105,26 @@ const AI = (function () {
     "REP RANGES by goal (adapt per exercise): build muscle 8-12, get stronger 3-6, endurance 12-20. Give a short " +
     "warmup ramp for barbell/compound lifts; skip warmup for small isolation moves. Working sets carry a target RIR " +
     "(usually 1-2; 2-3 for the first exposure to a new lift). Provide estimatedOneRepMax (your best guess of their " +
-    "1RM on this lift in lb; 0 for bodyweight) so the app can chart strength. Set readiness: 'confident' with good " +
+    "1RM on this lift in lb; 0 for bodyweight) so the app can chart strength, and restSeconds (rest between working " +
+    "sets: ~60-90s isolation, 120-180s heavy compounds, shorter for endurance). Set readiness: 'confident' with good " +
     "history, 'estimate' for a fresh prescription from profile, 'needs_feeler' only if the movement is genuinely " +
     "hard to gauge. Rationale = one or two sentences that reference their profile/history/feeler. cues = 1-3 short " +
-    "form cues. If a photo is provided, identify the exercise/machine first, then prescribe.";
+    "form cues. If a photo is provided, identify the exercise/machine first, then prescribe.\n\n" +
+    "GOAL NOTES: the profile may include free-form goalNotes the user wrote — weave their stated priorities into your " +
+    "choices (e.g. 'bigger arms', 'bad shoulder', 'training for a marathon').\n\n" +
+    "MID-WORKOUT RE-DIAL: if completedSets and remainingCount are provided, the user is partway through this exercise " +
+    "and already did the completedSets. Prescribe ONLY the next {remainingCount} working sets, adjusting the load from " +
+    "how those completed sets actually went. Do NOT include the completed sets in workingSets — return exactly " +
+    "remainingCount working sets.";
+
+  const RECOMMEND_SYSTEM =
+    "You are a strength coach planning the user's next session. Given their profile, goal, free-form goal notes, and " +
+    "recent training history (which exercises/muscles they trained and when), recommend what to train TODAY. Reason " +
+    "about muscle recovery (roughly 48h before hitting a muscle hard again), sensible weekly frequency for their goal, " +
+    "and balance (don't let a muscle group go stale or get overtrained). Output recommendedFocus (1-3 body parts, or a " +
+    "named split like 'Push'/'Pull'/'Legs'), a punchy headline, a 2-3 sentence rationale, and a status for the major " +
+    "muscle groups (chest, back, shoulders, arms, legs, core). If they've trained hard several days straight with no " +
+    "break, it's fine to recommend a rest or active-recovery day. Be decisive — the user wants a clear call, not options.";
 
   const PLAN_SYSTEM =
     "You are a world-class strength coach. Build a complete, well-ordered training session for the requested focus, " +
@@ -132,7 +174,9 @@ const AI = (function () {
       goal: opts.profile && opts.profile.goal,
       exercise: opts.exerciseName || null,
       history: opts.history || null,
-      feelerSet: opts.feeler || null,   // {weight, reps, rir} the user just did, to dial in the rest
+      feelerSet: opts.feeler || null,            // {weight, reps, rir} the user just did
+      completedSets: opts.completedSets || null, // sets already done this session (mid-workout re-dial)
+      remainingCount: opts.remainingCount || null,
     };
 
     const content = [];
@@ -170,7 +214,21 @@ const AI = (function () {
     }, key);
   }
 
-  return { coach, plan };
+  // opts: { profile, history, apiKey, model }
+  async function recommend(opts) {
+    const key = (opts.apiKey || "").trim();
+    if (!key) throw new Error("NO_KEY");
+    const payload = { unit: "lb", profile: opts.profile, goal: opts.profile && opts.profile.goal, recentHistory: opts.history || null, today: opts.today || null };
+    return call({
+      model: opts.model || "claude-opus-4-8",
+      max_tokens: 900,
+      system: RECOMMEND_SYSTEM,
+      messages: [{ role: "user", content: "What should I train today?\n```json\n" + JSON.stringify(payload, null, 2) + "\n```\nReturn structured output." }],
+      output_config: { format: { type: "json_schema", schema: RECOMMEND_SCHEMA } },
+    }, key);
+  }
+
+  return { coach, plan, recommend };
 })();
 
 if (typeof window !== "undefined") window.AI = AI;
