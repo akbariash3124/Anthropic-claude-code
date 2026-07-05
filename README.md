@@ -1,53 +1,62 @@
-# Coach — AI Strength Trainer
+# Coach — AI Recomp Trainer
 
-An AI coach that tells you exactly what to lift — **right now, from your first
-set.** No calibration week, no "do three workouts so the app can learn you." You
-tell it your body and goal once, and it prescribes real, dialed-in weights
-immediately, then adapts every session from how your sets actually felt.
+A personal AI strength coach built for one job: **recomposition** — build
+muscle, drop fat — with novice-friendly zone-2 cardio programmed in. Every
+weight, rep, volume target, deload, diet call and cardio dose is decided by
+Claude; the app's job is to make sure the AI decides from **your full measured
+state, never a blank slate**.
 
-Every weight, rep, and progression decision comes from Claude. The app itself is
-just the interface, local storage, and charts. Pounds throughout. Mobile-first.
+Static page, no backend. All data on-device (localStorage). Pounds throughout.
 
-## Why it's different
+## The brain (why this isn't a thin AI wrapper)
 
-- **Accurate from set one.** From your profile (sex, bodyweight, height,
-  experience, goal) the coach gives a competent starting weight — the way a real
-  trainer sizes up a new client. No ramp-up period.
-- **Dial in within a single session.** Weight feels off? Do one set, tap
-  **🎯 re-dial**, and the coach instantly corrects the rest of today's weights.
-  Minutes, not workouts.
-- **It visibly adapts.** Log reps + how hard each set felt; next time the card
-  shows *"↗ Adapted from last time"* and the coach pushes harder or backs off —
-  decisively, in one step.
-- **Photograph any machine.** Snap a photo of some obscure machine (or just
-  describe it) and the coach identifies it and programs it.
-- **Plan a whole session.** Pick Push / Pull / Legs / etc. and get a full,
-  ordered workout.
+| Layer | File | What it does |
+| --- | --- | --- |
+| **Athlete Model** | `store.js` | The coach's own living notebook about you — responder patterns, RIR calibration, niggle history, what worked. AI-written, consolidated weekly, fed to *every* call. |
+| **Observatory** | `observatory.js` | Pure measurement: weekly volume ledger (fractional hard sets per muscle, auto-tagged by the AI), e1RM trends + slopes, bodyweight EMA trend, prediction-engine metrics, muscle freshness decay, exercise ROI, cardio load, adherence — distilled into the compact context bundle behind every prompt. |
+| **Brain** | `brain.js` | All AI calls: per-exercise coaching (photo-ID, feeler, partial re-dial, swap, timebox, rescale), session planner, daily focus (which body parts are due + the cardio call), the **weekly deep review** (extended thinking + an adversarial critique pass), free-form coach chat, post-workout debrief, physique photo audit. |
+| **Prediction engine** | prescriptions *are* predictions | Every prescribed set is compared to what you logged: accuracy-within-±1-rep, your personal RIR reporting bias, your fatigue curve (reps lost per set). Shown in Trends ("how well the coach knows you") and fed back into every prescription. |
+
+### The loops
+- **Per set:** mark a set done → rest timer starts (AI-chosen duration). Badly
+  miss the prediction on set 1 → the app offers to **rescale the whole
+  remaining session** to today's actual condition.
+- **Per exercise:** 🎯 re-dial re-prescribes **only the sets you haven't done**;
+  🔁 swap replaces an unavailable machine with the same-stimulus substitute,
+  fully prescribed.
+- **Per day:** Today's Focus reads the ledger + freshness + block week and says
+  what's due — lifting *and* zone-2 cardio minutes (novice-progressed, never
+  before legs).
+- **Per week:** the Weekly Deep Review adjudicates recomp (weight trend vs
+  strength trend), sets next week's per-muscle volume targets, makes the
+  block/deload call, runs n=1 volume experiments, rotates out flat exercises,
+  flags stalls with diagnostic questions, doses cardio, and rewrites the
+  Athlete Model. A second adversarial pass attacks the plan before it ships.
+- **Per month:** physique photo audit — the scale can't see recomp; photos can.
+- **Forever:** hierarchical memory (weekly → block → career rollups) so month
+  14 is smarter than month 2.
+
+### Also in there
+Active-workout persistence (survives closing the app; sticky bar + finish →
+AI debrief), plate math, PR detection, niggle registry the coach programs
+around, multi-muscle session planning with a time budget, mid-workout
+add-by-photo, protein target + free-form goals fed to every call.
 
 ## Run it
 
 Open `index.html`, or serve the folder:
 
 ```bash
-python3 -m http.server 8000     # then http://localhost:8000
+python3 -m http.server 8000   # http://localhost:8000
 ```
 
-## Setup (once)
+Onboard (60s), then paste your Anthropic API key once under **Me → Coach**
+(stored on-device; GitHub push protection forbids committing a real key —
+`config.js` exists for private self-hosting only).
 
-1. On first launch, a 90-second onboarding collects your profile and an
-   [Anthropic API key](https://console.anthropic.com/settings/keys). The key is
-   stored **only in your browser** and sent directly to Anthropic — it's required
-   because this is a client-side AI app. You can add/change it later under **Me**.
-2. **Today** → type or 📷 photograph an exercise → **Program my sets** → do the
-   work, log reps + reps-in-reserve → **Log session**.
-3. Come back tomorrow — it remembers and progresses you.
+## Verify
 
-## Files
-
-| File | Role |
-| --- | --- |
-| `ai.js` | The coach — all Claude calls (prescribe, plan) via structured outputs. |
-| `app.js` | UI, local storage, charts, the session loop. |
-| `index.html`, `styles.css` | Mobile-first interface. |
-
-No local exercise database, no strength formulas — the intelligence is the model.
+`node engine.test.js` is gone — there is no math engine. The test surface is
+the mocked end-to-end browser suite used during development (Playwright), plus
+`observatory.js` unit checks; the AI's judgment is steered by the system
+prompts in `brain.js`.
