@@ -16,7 +16,7 @@ const Store = (function () {
 
   const blank = () => ({
     v: 2,
-    settings: { apiKey: CFG.apiKey || "", model: CFG.model || "claude-opus-4-8" },
+    settings: { apiKey: CFG.apiKey || "", model: CFG.model || "claude-opus-4-8", backup: { token: "", repo: "", lastPushedAt: null, lastError: "" }, lastBackupAt: null },
     profile: {
       sex: "", weightLb: null, heightCm: null, experience: "Beginner",
       goal: "Recomp (build muscle + lose fat)", goalNotes: "", known: "", proteinTarget: null, equipmentNotes: "",
@@ -83,6 +83,7 @@ const Store = (function () {
         const merged = Object.assign(blank(), parsed);
         // deep-merge the objects that must keep their shape
         merged.settings = Object.assign(blank().settings, parsed.settings || {});
+        merged.settings.backup = Object.assign(blank().settings.backup, (parsed.settings || {}).backup || {});
         merged.profile = Object.assign(blank().profile, parsed.profile || {});
         merged.athleteModel = Object.assign(blank().athleteModel, parsed.athleteModel || {});
         merged.block = Object.assign(blank().block, parsed.block || {});
@@ -192,7 +193,12 @@ const Store = (function () {
   }
 
   /* ---------- bulk ---------- */
-  function exportData() { const c = JSON.parse(JSON.stringify(state)); c.settings.apiKey = ""; return c; }
+  function exportData() {
+    const c = JSON.parse(JSON.stringify(state));
+    c.settings.apiKey = "";
+    if (c.settings.backup) c.settings.backup.token = ""; // never let secrets leave the device
+    return c;
+  }
   function importData(obj) {
     const key = state.settings.apiKey;
     state = Object.assign(blank(), obj);

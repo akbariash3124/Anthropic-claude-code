@@ -123,8 +123,23 @@
     const wt = Obs.weightTrend(S());
     $("#weighTrend").textContent = wt.lbPerWeek != null ? `trend ${wt.lbPerWeek > 0 ? "+" : ""}${wt.lbPerWeek} lb/wk` : (wt.latest ? `latest ${wt.latest} lb` : "log daily for the trend");
 
+    renderBackupNudge();
     renderReviewBanner();
     renderFocus(false);
+  }
+
+  function renderBackupNudge() {
+    const el = $("#backupNudge");
+    const due = Backup.nudgeDue();
+    el.classList.toggle("hidden", !due);
+    if (!due) return;
+    el.innerHTML = Backup.configured()
+      ? `<div><b>Backup is stale.</b><br>Auto-backup hasn't run in a week.</div><button id="bkNudgeGo">Back up now</button>`
+      : `<div><b>Protect the coach's memory.</b><br>Everything lives on this phone only right now.</div><button id="bkNudgeGo">Set up →</button>`;
+    $("#bkNudgeGo").addEventListener("click", async () => {
+      if (!Backup.configured()) { switchView("me"); toast("Add a GitHub token + private repo under Backup"); return; }
+      try { await Backup.push("manual"); renderBackupNudge(); toast("Backed up ✓"); } catch (e) { toast(e.message); }
+    });
   }
 
   function renderReviewBanner() {
@@ -144,6 +159,7 @@
     try {
       const data = await Brain.weeklyReview((s) => { const t = $("#rvStage"); if (t) t.textContent = s; });
       Store.addWeeklyReview(data);
+      Backup.auto("weekly-review");
       el.classList.add("hidden");
       $("#reviewResult").innerHTML = "";
       $("#reviewResult").appendChild(reviewCard(data));
@@ -153,6 +169,12 @@
   }
 
   function reviewCard(d) {
+    // tolerate partial/legacy review objects
+    d = Object.assign({ headline: "", analysis: "", muscleTargets: [], stalls: [], exerciseCalls: [] }, d);
+    d.recompVerdict = Object.assign({ status: "insufficient_data", note: "" }, d.recompVerdict);
+    d.blockCall = Object.assign({ action: "continue", weekNum: 1, note: "" }, d.blockCall);
+    d.dietCall = Object.assign({ mode: "hold_deficit", note: "" }, d.dietCall);
+    d.cardioCall = Object.assign({ weeklyMinutes: 0, note: "" }, d.cardioCall);
     const el = document.createElement("div");
     el.className = "review-card";
     const targets = (d.muscleTargets || []).map((t) => `<span><b>${esc(t.muscle)}</b> ${t.setsLow}–${t.setsHigh}</span>`).join("");
@@ -318,7 +340,7 @@
     el.innerHTML =
       `<div class="xc-head">${oneRm}<div class="xc-title">${esc(rx.resolvedName)}</div>` +
       `<div class="xc-sub">${esc(rx.muscleGroup)} · ${esc(rx.equipment)}${rx.perHand ? " · per hand" : ""} · rest ${Math.round((rx.restSeconds || 120) / 60 * 10) / 10}m</div></div>` +
-      `<div class="xc-body">` + badge +
+      `<div class="xc-body">` + badge + lastLogHtml(rx.resolvedName) +
       (rx.rationale ? `<div class="rationale">${esc(rx.rationale)}</div>` : "") +
       (cues ? `<div class="cues">${cues}</div>` : "") +
       (warm.length ? `<div class="setgroup-label">Warm-up</div>` + warm.map((s, i) => setRow(restoredOr(rows, true, i, s), i, true)).join("") : "") +
@@ -333,6 +355,22 @@
     el.addEventListener("click", onCardClick);
     el.addEventListener("input", persistActive);
     return el;
+  }
+
+  // "Last time" block — your actual recent numbers for this lift, on the card.
+  function lastLogHtml(name) {
+    const hist = S().sessions.filter((s) => s.name.toLowerCase() === (name || "").toLowerCase()).slice(-3).reverse();
+    if (!hist.length) return "";
+    const line = (s) => {
+      const sets = (s.logged || []).map((x) => `${round(x.weight)}×${x.reps}${x.rir != null ? `@${x.rir}` : ""}`).join(", ");
+      const e = Obs.sessionE1rm(s);
+      return `<div class="ll-row"><span class="ll-date">${fmtDate(s.date)}</span><span class="ll-sets">${sets}</span>${e ? `<span class="ll-e1rm">${r1(e)}</span>` : ""}</div>`;
+    };
+    return `<div class="lastlog" data-ll>` +
+      `<div class="ll-head">Last time${hist.length > 1 ? ` <span class="ll-more">· tap for ${hist.length - 1} more</span>` : ""}</div>` +
+      line(hist[0]) +
+      (hist.length > 1 ? `<div class="ll-extra hidden">${hist.slice(1).map(line).join("")}</div>` : "") +
+      `</div>`;
   }
   function restoredOr(rows, warm, i, s) {
     if (!rows) return { w: s.weight, r: s.reps, rir: s.targetRIR != null ? s.targetRIR : 1, done: false };
@@ -351,6 +389,8 @@
 
   function onCardClick(e) {
     const el = e.currentTarget;
+    const ll = e.target.closest("[data-ll]");
+    if (ll) { $(".ll-extra", ll)?.classList.toggle("hidden"); return; }
     const done = e.target.closest(".donebtn");
     if (done) {
       const row = done.closest(".setrow");
@@ -503,6 +543,7 @@
   function ensureWorkout() {
     if (!Store.getActive()) Store.setActive({ startedAt: new Date().toISOString(), items: [] });
     updateWorkoutBar();
+    acquireWake();
   }
   function persistActive() {
     const active = Store.getActive();
@@ -524,6 +565,7 @@
     });
     showAddEx(true);
     updateWorkoutBar();
+    acquireWake();
   }
   function updateWorkoutBar() {
     const a = Store.getActive();
@@ -548,7 +590,8 @@
     const savedNames = cards.filter((el) => el._saved).map((el) => el._rx.resolvedName);
     Store.setActive(null); rescaleOffered = false;
     updateWorkoutBar();
-    stopRest();
+    stopRest(); releaseWake();
+    if (savedNames.length) Backup.auto("workout");
     if (savedNames.length && hasKey()) {
       const box = document.createElement("div");
       box.className = "debrief"; box.innerHTML = `<span class="spinner"></span>Coach is reviewing your session…`;
@@ -573,10 +616,42 @@
     el.classList.remove("hidden", "done"); lbl.textContent = "Rest"; cnt.textContent = fmt(left);
     restInt = setInterval(() => {
       left--; cnt.textContent = fmt(Math.max(0, left));
-      if (left <= 0) { clearInterval(restInt); el.classList.add("done"); lbl.textContent = "Go!"; cnt.textContent = "💥"; setTimeout(() => el.classList.add("hidden"), 4000); }
+      if (left <= 0) { clearInterval(restInt); el.classList.add("done"); lbl.textContent = "Go!"; cnt.textContent = "💥"; restAlert(); setTimeout(() => el.classList.add("hidden"), 4000); }
     }, 1000);
   }
   function stopRest() { clearInterval(restInt); $("#restTimer").classList.add("hidden"); }
+
+  // beep + vibrate when rest ends (AudioContext unlocked by the "done" tap)
+  let ac = null;
+  function restAlert() {
+    try {
+      ac = ac || new (window.AudioContext || window.webkitAudioContext)();
+      if (ac.state === "suspended") ac.resume();
+      [0, 0.22].forEach((t) => {
+        const o = ac.createOscillator(), g = ac.createGain();
+        o.connect(g); g.connect(ac.destination);
+        o.frequency.value = 880;
+        g.gain.setValueAtTime(0.0001, ac.currentTime + t);
+        g.gain.exponentialRampToValueAtTime(0.35, ac.currentTime + t + 0.02);
+        g.gain.exponentialRampToValueAtTime(0.0001, ac.currentTime + t + 0.18);
+        o.start(ac.currentTime + t); o.stop(ac.currentTime + t + 0.2);
+      });
+    } catch { /* audio unavailable */ }
+    try { navigator.vibrate && navigator.vibrate([200, 100, 200]); } catch {}
+  }
+
+  // keep the screen on during an active workout
+  let wakeLock = null;
+  async function acquireWake() {
+    try {
+      if (navigator.wakeLock && !wakeLock && Store.getActive()) {
+        wakeLock = await navigator.wakeLock.request("screen");
+        wakeLock.addEventListener("release", () => { wakeLock = null; });
+      }
+    } catch { /* not granted / unsupported */ }
+  }
+  function releaseWake() { try { wakeLock && wakeLock.release(); } catch {} wakeLock = null; }
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") acquireWake(); });
 
   /* ---------- cardio ---------- */
   function saveCardio() {
@@ -587,6 +662,7 @@
     Store.addCardio({ modality: mod, minutes: min, rpe });
     $("#cardioMin").value = ""; $("#cardioRpe").value = "";
     toast(`${mod} · ${min} min logged 🫀`);
+    Backup.auto("cardio");
     renderTrends();
   }
 
@@ -805,6 +881,10 @@
     $("#meKnown").value = p.known || "";
     $("#meKey").value = S().settings.apiKey;
     $("#meModel").value = S().settings.model;
+    const bk = S().settings.backup || {};
+    $("#bkToken").value = bk.token || "";
+    $("#bkRepo").value = bk.repo || "";
+    $("#backupStatus").textContent = bk.lastPushedAt ? `last push ${fmtDate(bk.lastPushedAt)}` : (bk.lastError ? `⚠ ${bk.lastError}` : "not set up");
   }
   function setChips(sel, val) { $$(`${sel} .chip`).forEach((c) => c.classList.toggle("active", c.dataset.v === val)); }
   function chipVal(sel) { const c = $(`${sel} .chip.active`); return c ? c.dataset.v : ""; }
@@ -841,7 +921,8 @@
     if (a === "export") {
       const blob = new Blob([JSON.stringify(Store.exportData(), null, 2)], { type: "application/json" });
       const url = URL.createObjectURL(blob); const el = document.createElement("a"); el.href = url; el.download = `coach-backup-${Store.today()}.json`; el.click(); URL.revokeObjectURL(url);
-      toast("Exported (key excluded)");
+      Backup.markDownloaded(); renderBackupNudge();
+      toast("Exported (secrets excluded)");
     } else if (a === "import") $("#importFile").click();
     else if (a === "reset") { if (confirm("Erase everything?")) { Store.reset(); location.reload(); } }
   }
@@ -938,6 +1019,23 @@
     });
     $("#saveKey").addEventListener("click", () => { S().settings.apiKey = $("#meKey").value.trim(); S().settings.model = $("#meModel").value; Store.save(); renderToday(); toast("Saved"); });
 
+    // backup panel
+    $("#bkSave").addEventListener("click", async () => {
+      const bk = S().settings.backup;
+      bk.token = $("#bkToken").value.trim(); bk.repo = $("#bkRepo").value.trim().replace(/^https?:\/\/github\.com\//, "");
+      bk.lastError = ""; Store.save();
+      if (!Backup.configured()) { toast("Enter both token and repo"); return; }
+      const btn = $("#bkSave"); btn.disabled = true; btn.textContent = "Backing up…";
+      try { await Backup.push("manual"); renderMe(); renderBackupNudge(); toast("Backed up to GitHub ✓"); }
+      catch (e) { toast(e.message); }
+      finally { btn.disabled = false; btn.textContent = "Save & back up now"; }
+    });
+    $("#bkRestore").addEventListener("click", async () => {
+      if (!confirm("Replace everything on this device with the GitHub backup?")) return;
+      try { await Backup.restore(); toast("Restored — reloading"); setTimeout(() => location.reload(), 600); }
+      catch (e) { toast(e.message); }
+    });
+
     $$("[data-data]").forEach((b) => b.addEventListener("click", () => dataAction(b.dataset.data)));
     $("#importFile").addEventListener("change", (e) => {
       const f = e.target.files[0]; if (!f) return;
@@ -953,4 +1051,8 @@
   restoreActive();
   startOnboardingIfNeeded();
   if (!hasKey() && S().onboarded) setTimeout(() => toast("Add your API key in Me to wake the coach"), 700);
+  // PWA: offline shell + home-screen install (needs http(s); no-op on file://)
+  if ("serviceWorker" in navigator && /^https?:/.test(location.protocol)) {
+    navigator.serviceWorker.register("sw.js").catch(() => {});
+  }
 })();

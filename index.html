@@ -5,6 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <meta name="theme-color" content="#0b1020" />
   <title>Coach — AI Recomp Trainer</title>
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" type="image/png" href="icon-192.png" />
+  <link rel="apple-touch-icon" href="apple-touch-icon.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Coach" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -44,6 +51,7 @@
         </div>
       </div>
 
+      <div id="backupNudge" class="keybanner hidden"></div>
       <div id="reviewBanner" class="review-banner hidden"></div>
       <div id="focusRec" class="focus-rec hidden"></div>
       <div id="reviewResult" class="result"></div>
@@ -219,6 +227,18 @@
       </div>
 
       <div class="panel">
+        <div class="panel-head"><h2>Backup</h2><span class="muted-sm" id="backupStatus"></span></div>
+        <p class="fineprint">Auto-saves the coach's memory to a <b>private</b> GitHub repo after workouts and reviews.
+          Make a fine-grained token with Contents read/write on one private repo. The snapshot never contains your API key or this token.</p>
+        <label class="field"><span>GitHub token</span><input type="password" id="bkToken" placeholder="github_pat_…" autocomplete="off" /></label>
+        <label class="field"><span>Repo (owner/name)</span><input type="text" id="bkRepo" placeholder="you/coach-backups" autocomplete="off" /></label>
+        <div class="row">
+          <button class="cta small" id="bkSave">Save &amp; back up now</button>
+          <button class="ghost" id="bkRestore">Restore from GitHub</button>
+        </div>
+      </div>
+
+      <div class="panel">
         <div class="panel-head"><h2>Data</h2></div>
         <div class="row">
           <button class="ghost" data-data="export">Export</button>
@@ -258,6 +278,7 @@
   <script src="store.js"></script>
   <script src="observatory.js"></script>
   <script src="brain.js"></script>
+  <script src="backup.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
