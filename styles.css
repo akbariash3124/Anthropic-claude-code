@@ -314,6 +314,16 @@ textarea { background: var(--bg); border: 1px solid var(--line); color: var(--te
 .plates-line { font-size: 12.5px; color: var(--accent); margin: 4px 2px 8px; }
 .plates-btn { background: none; border: none; color: var(--muted); font-size: 12px; cursor: pointer; padding: 4px 2px; text-decoration: underline dotted; }
 
+/* last-time block on exercise cards */
+.lastlog { background: var(--bg); border: 1px solid var(--line); border-radius: 11px; padding: 9px 12px; margin: 10px 0 2px; cursor: pointer; }
+.ll-head { font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 800; margin-bottom: 5px; }
+.ll-more { font-weight: 600; text-transform: none; letter-spacing: 0; }
+.ll-row { display: flex; align-items: baseline; gap: 10px; font-size: 13px; padding: 2px 0; }
+.ll-date { color: var(--muted); font-size: 11.5px; flex: none; width: 52px; }
+.ll-sets { flex: 1; font-variant-numeric: tabular-nums; }
+.ll-e1rm { color: var(--accent); font-size: 11.5px; font-weight: 700; flex: none; }
+.ll-e1rm::after { content: " e1RM"; color: var(--muted); font-weight: 600; }
+
 /* debrief */
 .debrief { background: linear-gradient(135deg, rgba(52,211,153,.12), rgba(51,214,192,.08)); border: 1px solid rgba(52,211,153,.35);
   border-radius: 12px; padding: 12px 14px; font-size: 13.5px; line-height: 1.55; margin-top: 10px; }
