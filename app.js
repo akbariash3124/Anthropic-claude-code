@@ -1,666 +1,475 @@
 /* ============================================================
-   app.js — UI + session orchestration (Sections 3–5).
-   Wires the pure Engine and the Data repository together. The AI
-   (Recognize) is used ONLY to classify unknown exercises; it never
-   touches a weight or rep target. Display unit: pounds (lb).
+   app.js — UI + state for the AI strength coach.
+   The AI decides every weight and rep; this file is just the
+   interface, local storage, and charts. Pounds throughout.
    ============================================================ */
 
 (() => {
   "use strict";
 
+  const KEY = "coach.v1";
   const $ = (s, r = document) => r.querySelector(s);
   const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
-  const round1 = (n) => Math.round(n * 10) / 10;
-  const fmtDate = (iso) => new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
-  const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-  const titleCasePattern = (p) => ({ vertical_push: "Vertical push", horizontal_push: "Horizontal push", vertical_pull: "Vertical pull", horizontal_pull: "Horizontal pull", squat: "Squat", hinge: "Hinge" }[p] || p);
+  const round = (n) => Math.round(n);
+  const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const fmtDate = (iso) => new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
-  let currentExercise = null;
-  let currentRx = null;          // { totalLoad, repLow, repHigh, action|deload, mode, bodyweight }
-  let pendingPhoto = null;       // data URL
-  let pendingIdentified = null;  // {name,pattern,loadType,coeff,...}
-  let progressMetric = "e1rm";
+  /* ---------- store ---------- */
+  const blank = () => ({
+    settings: { apiKey: "", model: "claude-opus-4-8" },
+    profile: { sex: "", weightLb: null, heightCm: null, experience: "Beginner", goal: "Build muscle", known: "" },
+    onboarded: false,
+    sessions: [],
+  });
+  let store = load();
+  function load() { try { return Object.assign(blank(), JSON.parse(localStorage.getItem(KEY) || "{}")); } catch { return blank(); } }
+  function save() { localStorage.setItem(KEY, JSON.stringify(store)); }
 
-  /* ---------- display helpers (lb) ---------- */
-  function loadLabel(loadType, totalLoad) {
-    const d = Engine.toDisplayLoad(totalLoad, loadType);
-    return loadType === "dumbbell_pair" ? `${round1(d)}<small> lb/hand</small>` : `${round1(d)}<small> lb</small>`;
-  }
-  function displayWeight(loadType, totalLoad) { return round1(Engine.toDisplayLoad(totalLoad, loadType)); }
-  function weightUnitHint(loadType) { return loadType === "dumbbell_pair" ? "lb/hand" : "lb"; }
+  let mode = "single";
+  let pendingPhoto = null;
+  let pendingFocus = null;
+  let trendMetric = "e1rm";
 
-  function rirSelect(cls, selected) {
-    const opts = [0, 1, 2, 3, 4, 5].map((v) =>
-      `<option value="${v}"${v === selected ? " selected" : ""}>${v === 0 ? "0 (failure)" : v === 5 ? "5+ (easy)" : v}</option>`).join("");
-    return `<select class="${cls}">${opts}</select>`;
-  }
+  let toastT;
+  function toast(m) { const el = $("#toast"); el.textContent = m; el.classList.remove("hidden"); clearTimeout(toastT); toastT = setTimeout(() => el.classList.add("hidden"), 3400); }
 
-  let toastTimer;
-  function toast(msg) {
-    const el = $("#toast");
-    el.textContent = msg;
-    el.classList.remove("hidden");
-    clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => el.classList.add("hidden"), 3600);
-  }
+  /* ---------- helpers ---------- */
+  const wUnit = (perHand) => (perHand ? "lb/hand" : "lb");
+  const cmToFtIn = (cm) => cm ? { ft: Math.floor(cm / 2.54 / 12), in: Math.round((cm / 2.54) % 12) } : { ft: "", in: "" };
+  const ftInToCm = (ft, i) => { const f = parseInt(ft, 10) || 0, n = parseInt(i, 10) || 0; return f || n ? Math.round((f * 12 + n) * 2.54) : null; };
+  const profileReady = () => store.profile.goal && store.profile.experience;
+  const hasKey = () => !!store.settings.apiKey;
 
-  /* ---------- height conversion ---------- */
-  function cmToFtIn(cm) {
-    if (!cm) return { ft: "", in: "" };
-    const totalIn = cm / 2.54;
-    return { ft: Math.floor(totalIn / 12), in: Math.round(totalIn % 12) };
-  }
-  function ftInToCm(ft, inch) {
-    const f = parseInt(ft, 10) || 0, i = parseInt(inch, 10) || 0;
-    return f || i ? round1((f * 12 + i) * 2.54) : null;
+  function rirSelect(sel) {
+    return `<select class="s-rir">` + [0, 1, 2, 3, 4, 5].map((v) =>
+      `<option value="${v}"${v === sel ? " selected" : ""}>${v === 0 ? "0 · failure" : v === 5 ? "5+ · easy" : v + " left"}</option>`).join("") + `</select>`;
   }
 
-  /* ============================================================
-     RENDER
-     ============================================================ */
-  function renderAll() {
-    renderProfile();
-    renderCalibration();
-    renderExerciseSelect();
-    renderModeSelectors();
-    renderRecent();
-    renderProgress();
-  }
-
-  function renderModeSelectors() {
-    const mode = Data.user().defaultMode || "hypertrophy";
-    $("#profMode").value = mode;
-    if (!$("#trainMode").dataset.touched) $("#trainMode").value = mode;
-  }
-
-  /* ---------- profile ---------- */
-  function renderProfile() {
-    const u = Data.user();
-    const { ft, in: inch } = cmToFtIn(u.heightCm);
-    if (!$("#profFt").dataset.touched) { $("#profFt").value = ft; $("#profIn").value = inch; }
-    if (!$("#profWeight").dataset.touched) $("#profWeight").value = u.weightLb ?? "";
-    $("#profileStatus").textContent = u.weightLb ? "✓ saved" : "optional, but helps sanity-check loads";
-  }
-
-  /* ---------- calibration (§3) ---------- */
-  function renderCalibration() {
-    const tested = Engine.PATTERNS.filter((p) => Data.patternEstimate(p) != null).length;
-    const total = Engine.PATTERNS.length;
-    $("#calibCount").textContent = `${tested} / ${total} patterns mapped`;
-    $("#calibProgress").innerHTML = `<span style="width:${(tested / total) * 100}%"></span>`;
-
-    $("#calibList").innerHTML = Engine.PATTERNS.map((pattern, i) => {
-      const ref = Engine.referenceExercise(pattern);
-      const est = Data.patternEstimate(pattern);
-      const tested = est != null;
-      const result = tested ? `<div class="ci-result"><div class="ci-1rm">${round1(est)}<small> lb 1RM</small></div></div>` : "";
-      return (
-        `<div class="calib-item ${tested ? "tested" : ""}">` +
-          `<div class="ci-head">` +
-            `<span class="ci-step">${tested ? "✓" : i + 1}</span>` +
-            `<div><div class="ci-name">${escapeHtml(ref.name)}</div><div class="ci-group">${titleCasePattern(pattern)}</div></div>` +
-            result +
-          `</div>` +
-          `<div class="ci-form" data-pattern="${pattern}">` +
-            `<label class="field"><span>Weight (lb)</span><input type="number" class="ci-w" step="1" min="0" placeholder="0" /></label>` +
-            `<label class="field"><span>Reps (5–8)</span><input type="number" class="ci-r" step="1" min="1" placeholder="6" /></label>` +
-            `<label class="field"><span>Reps in reserve</span>${rirSelect("ci-rir", 1)}</label>` +
-            `<button class="btn primary ci-save" data-pattern="${pattern}">${tested ? "Retest" : "Save test"}</button>` +
-          `</div>` +
-        `</div>`
-      );
-    }).join("");
-
-    const done = $("#calibDone");
-    if (tested === total) {
-      const bw = Data.user().weightLb;
-      const ratios = bw
-        ? Engine.PATTERNS.map((p) => {
-            const ref = Engine.referenceExercise(p);
-            return `<div class="ratio"><div class="r-val">${round1(Data.patternEstimate(p) / bw)}×</div><div class="r-lbl">${escapeHtml(ref.name)}</div></div>`;
-          }).join("")
-        : `<p class="hint">Add bodyweight above to see strength-to-bodyweight ratios.</p>`;
-      done.innerHTML = `<h3>✓ Strength map complete</h3><p>Every pattern is calibrated. Head to <b>Train</b> — pick or photograph any exercise and you'll get a load and rep target tuned to you.</p>${bw ? `<div class="ratios">${ratios}</div>` : ratios}`;
-      done.classList.remove("hidden");
-    } else { done.classList.add("hidden"); done.innerHTML = ""; }
-  }
-
-  /* ---------- exercise select ---------- */
-  function renderExerciseSelect() {
-    const sel = $("#exSelect");
-    const prev = sel.value;
-    const byPattern = {};
-    Data.exercises().forEach((e) => { (byPattern[e.pattern] = byPattern[e.pattern] || []).push(e); });
-    sel.innerHTML = `<option value="">— choose —</option>` + Engine.PATTERNS.map((p) => {
-      const list = (byPattern[p] || []).map((e) => `<option value="${e.id}">${escapeHtml(e.name)}${e.custom ? " ★" : ""}</option>`).join("");
-      return `<optgroup label="${titleCasePattern(p)}">${list}</optgroup>`;
-    }).join("");
-    if (prev && Data.getExercise(prev)) sel.value = prev;
-  }
-
-  /* ---------- recent sessions ---------- */
-  function renderRecent() {
-    const recent = Data.allLogs().slice(-6).reverse();
-    $("#recentSessions").innerHTML = recent.length
-      ? recent.map(sessionCard).join("")
-      : `<p class="empty">No sessions yet. Pick an exercise and log your first set.</p>`;
-  }
-  function sessionCard(log) {
-    const ex = Data.getExercise(log.exerciseId);
-    const lt = ex ? ex.loadType : "barbell";
-    const pills = log.sets.map((s) =>
-      `<span class="pill">${displayWeight(lt, s.weight)}${lt === "dumbbell_pair" ? "/hand" : ""}×${s.reps}${s.rir != null ? ` @${s.rir}` : ""}</span>`).join("");
-    const vol = round1(log.sets.reduce((t, s) => t + s.weight * s.reps, 0));
-    return (
-      `<div class="session"><div class="session-head">` +
-        `<span class="name">${escapeHtml(ex ? ex.name : "?")}${log.deload ? " · deload" : ""}</span>` +
-        `<span class="date">${fmtDate(log.date)}</span></div>` +
-        `<div class="session-sets">${pills}</div>` +
-        `<div class="session-meta"><span>Volume ${vol} lb</span>${log.sessionEstimate1RM ? `<span>Est 1RM ${round1(log.sessionEstimate1RM)} lb</span>` : ""}</div>` +
-      `</div>`
-    );
+  /* ---------- history for the coach ---------- */
+  function buildHistory(name) {
+    const same = store.sessions.filter((s) => s.name.toLowerCase() === (name || "").toLowerCase()).slice(-3)
+      .map((s) => ({ date: s.date.slice(0, 10), sets: s.logged, estimatedOneRepMax: s.estimatedOneRepMax }));
+    const recent = store.sessions.slice(-6).map((s) => {
+      const top = s.logged.reduce((a, b) => (b.weight > (a ? a.weight : -1) ? b : a), null);
+      return { name: s.name, date: s.date.slice(0, 10), topSet: top };
+    });
+    return { thisExercise: same, recentSessions: recent };
   }
 
   /* ============================================================
-     WORKOUT LOOP (§4)
+     ONBOARDING
      ============================================================ */
-  function selectExercise(ex) {
-    currentExercise = ex;
-    pendingIdentified = null;
-    $("#identifyResult").classList.add("hidden");
-    buildPrescription();
+  const ob = { step: 0, draft: {} };
+  function startOnboardingIfNeeded() {
+    if (store.onboarded) return;
+    ob.step = 0; ob.draft = Object.assign({}, store.profile);
+    $("#onboard").classList.remove("hidden");
+    renderOnboard();
   }
-
-  function buildPrescription() {
-    const ex = currentExercise;
-    const panel = $("#prescribePanel");
-    if (!ex) { panel.classList.add("hidden"); return; }
-    panel.classList.remove("hidden");
-    $("#rxExercise").textContent = ex.name;
-    $("#rxMeta").textContent = `${titleCasePattern(ex.pattern)} · ${ex.loadType.replace("_", " ")}`;
-    const mode = $("#trainMode").value;
-    const card = $("#prescribeCard");
-
-    // Bodyweight path (Section-4 sub-decision: reps progression, not %1RM)
-    if (ex.loadType === "bodyweight") {
-      const logs = Data.logsForExercise(ex.id);
-      const lastBest = logs.length ? Math.max(...logs[logs.length - 1].sets.map((s) => s.reps)) : 0;
-      const target = lastBest ? lastBest + 1 : 8;
-      currentRx = { bodyweight: true, repTarget: target, mode };
-      card.innerHTML =
-        `<div class="rx"><span class="tag start">Bodyweight</span>` +
-        `<div class="rx-load">${target}<small> reps</small></div>` +
-        `<div class="rx-coach"><b>Reps first.</b> Beat ${lastBest || "your"} last time. When you clear ${target}+ clean reps on every set, add a rep or load up.</div></div>`;
-      renderLogInputs([{ reps: target, rir: 1 }, { reps: target, rir: 1 }, { reps: target, rir: 1 }]);
-      return;
-    }
-
-    const resolved = Data.resolve1RM(ex);
-    if (resolved == null) {
-      currentRx = null;
-      card.innerHTML =
-        `<div class="notice"><b>${titleCasePattern(ex.pattern)} isn't calibrated yet.</b><br>` +
-        `Do one calibration set for this movement pattern and every exercise in it becomes prescribable.` +
-        `<br><button class="btn primary" id="goCalibrate">Calibrate ${titleCasePattern(ex.pattern).toLowerCase()}</button></div>`;
-      $("#logSets").innerHTML = "";
-      $("#logActions").style.display = "none";
-      $("#goCalibrate").addEventListener("click", () => switchView("calibrate"));
-      return;
-    }
-    $("#logActions").style.display = "";
-
-    const isLower = Engine.isLowerPattern(ex.pattern);
-    const st = Data.exerciseState(ex.id);
-    const base = Engine.prescribe(resolved, mode, ex.loadType, isLower);
-
-    if (Data.patternDeloadPending(ex.pattern)) {
-      const working = (st && st.lastPrescribedTotal) || base.totalLoad;
-      const dp = Engine.deloadPrescription(working, mode, ex.loadType, isLower);
-      currentRx = { totalLoad: dp.totalLoad, repLow: dp.reps, repHigh: dp.reps, deload: true, mode };
-      card.innerHTML = rxCard("deload", ex, dp.totalLoad, dp.reps, dp.reps,
-        `<b>Deload.</b> Strength stalled or dipped on this pattern, so back off to ~88% for one clean, easy session (RIR 3). We resume from here next time.`);
+  function dots(active, n = 3) { return `<div class="ob-steps">${Array.from({ length: n }, (_, i) => `<div class="ob-dot ${i <= active ? "on" : ""}"></div>`).join("")}</div>`; }
+  function chipRow(name, opts, val) {
+    return `<div class="chips small" data-chips="${name}">${opts.map((o) => `<button class="chip ${val === o.v ? "active" : ""}" data-v="${o.v}">${o.t}</button>`).join("")}</div>`;
+  }
+  function renderOnboard() {
+    const b = $("#obBody");
+    if (ob.step === 0) {
+      b.innerHTML = dots(0) +
+        `<h2>Let's build your coach</h2><p class="lead">Ninety seconds. I'll use this to nail your very first weights — no guesswork, no "test week."</p>` +
+        `<div class="field"><span>Sex</span>${chipRow("sex", [{ v: "Male", t: "Male" }, { v: "Female", t: "Female" }], ob.draft.sex)}</div>` +
+        `<div class="row"><label class="field"><span>Bodyweight (lb)</span><input type="number" id="obW" value="${ob.draft.weightLb || ""}" placeholder="180" /></label>` +
+        `<label class="field"><span>Height</span><span class="ht"><input type="number" id="obFt" value="${cmToFtIn(ob.draft.heightCm).ft}" placeholder="5" /><i>ft</i><input type="number" id="obIn" value="${cmToFtIn(ob.draft.heightCm).in}" placeholder="10" /><i>in</i></span></label></div>` +
+        `<div class="field"><span>Experience</span>${chipRow("experience", [{ v: "Beginner", t: "New" }, { v: "Intermediate", t: "Some" }, { v: "Advanced", t: "Experienced" }], ob.draft.experience)}</div>` +
+        `<div class="field"><span>Main goal</span>${chipRow("goal", [{ v: "Build muscle", t: "Build muscle" }, { v: "Get stronger", t: "Get stronger" }, { v: "Endurance", t: "Endurance" }], ob.draft.goal)}</div>` +
+        `<div class="ob-actions"><button class="cta" id="obNext">Continue →</button></div>`;
+    } else if (ob.step === 1) {
+      b.innerHTML = dots(1) +
+        `<h2>Know any of your lifts?</h2><p class="lead">Totally optional — but it sharpens your first session. Just rough numbers.</p>` +
+        `<label class="field"><span>Lifts you know</span><input type="text" id="obKnown" value="${esc(ob.draft.known || "")}" placeholder="bench 135x8, squat 225x5, curl 30s" /></label>` +
+        `<div class="ob-actions"><button class="ghost" id="obSkip">Skip</button><button class="cta" id="obNext">Continue →</button></div>`;
     } else {
-      const totalLoad = st && st.nextWeightTotal != null ? st.nextWeightTotal : base.totalLoad;
-      const action = st ? st.lastAction : "start";
-      currentRx = { totalLoad, repLow: base.repLow, repHigh: base.repHigh, action, mode };
-      card.innerHTML = rxCard(action, ex, totalLoad, base.repLow, base.repHigh, coachLine(action, base));
+      b.innerHTML = dots(2) +
+        `<h2>Connect your coach</h2><p class="lead">The coach runs on Claude. Paste an <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">Anthropic API key</a> — it's stored only on this device and sent straight to Anthropic. You can add it later in <b>Me</b>.</p>` +
+        `<label class="field"><span>API key</span><input type="password" id="obKey" value="${esc(store.settings.apiKey)}" placeholder="sk-ant-..." /></label>` +
+        `<div class="ob-actions"><button class="ghost" id="obSkip">Later</button><button class="cta" id="obDone">Start training →</button></div>`;
     }
-    const start = { reps: currentRx.repLow, rir: 1, w: displayWeight(ex.loadType, currentRx.totalLoad) };
-    renderLogInputs([start, start, start]);
+    wireOnboard();
   }
-
-  function rxCard(tagKey, ex, totalLoad, repLow, repHigh, coach) {
-    const tag = tagKey === "deload" ? "deload" : tagKey;
-    const label = { add_load: "Add load", hold_push_reps: "Push reps", hold_retry: "Retry", start: "Start", deload: "Deload" }[tagKey] || "Start";
-    const reps = repLow === repHigh ? `${repLow}` : `${repLow}–${repHigh}`;
-    return (
-      `<div class="rx ${tagKey === "deload" ? "deload" : ""}">` +
-        `<span class="tag ${tag}">${label}</span>` +
-        `<div class="rx-load">${loadLabel(ex.loadType, totalLoad)}</div>` +
-        `<div class="rx-reps">${reps} reps</div>` +
-        `<div class="rx-coach">${coach}</div>` +
-      `</div>`
-    );
-  }
-  function coachLine(action, base) {
-    if (action === "start") return `<b>First time here.</b> Start at the bottom of the range (${base.repLow}). The engine dials your load in within 2–3 sessions.`;
-    if (action === "add_load") return `<b>You earned it.</b> New load — reset to ${base.repLow} reps and build back up.`;
-    if (action === "hold_push_reps") return `<b>Same weight, more reps.</b> Hit ${base.repHigh} on every set at RIR ≥ 1 to unlock more load next time.`;
-    if (action === "hold_retry") return `<b>Own this weight.</b> Last time was a grind or came up short — repeat it cleanly before we add anything.`;
-    return `Aim for the bottom of the range.`;
-  }
-
-  function renderLogInputs(rows) {
-    const ex = currentExercise;
-    const bw = ex.loadType === "bodyweight";
-    $("#logSets").innerHTML =
-      `<p class="log-banner">Log what you actually did, set by set — weight, reps, and reps-in-reserve (how many you had left). The engine recalibrates from this.</p>` +
-      rows.map((r, i) => logRow(i, r, bw, ex.loadType)).join("");
-  }
-  function logRow(i, r, bw, loadType) {
-    const wInput = bw ? "" :
-      `<input type="number" class="log-w" step="0.5" min="0" value="${r.w != null ? r.w : ""}" placeholder="0" /><span class="set-x">×</span>`;
-    return (
-      `<li><span class="set-num">${i + 1}</span>` +
-        (bw ? "" : `<span class="set-target">${weightUnitHint(loadType)}</span>`) +
-        wInput +
-        `<input type="number" class="log-r" step="1" min="0" value="${r.reps != null ? r.reps : ""}" placeholder="reps" />` +
-        rirSelect("log-rir", r.rir != null ? r.rir : 1) +
-      `</li>`
-    );
-  }
-
-  function collectSets() {
-    const ex = currentExercise;
-    const bw = ex.loadType === "bodyweight";
-    const out = [];
-    $$("#logSets li").forEach((li) => {
-      const reps = parseInt($(".log-r", li).value, 10);
-      const rir = parseInt($(".log-rir", li).value, 10);
-      if (!(reps > 0)) return;
-      let total = 0;
-      if (!bw) {
-        const dw = parseFloat($(".log-w", li).value);
-        if (!(dw >= 0)) return;
-        total = Engine.toTotalLoad(dw, ex.loadType);
-      }
-      out.push({ weight: total, reps, rir: isNaN(rir) ? 0 : rir });
-    });
-    return out;
-  }
-
-  function saveSession() {
-    const ex = currentExercise;
-    if (!ex || !currentRx) return;
-    const sets = collectSets();
-    if (!sets.length) { toast("Log at least one set"); return; }
-    const mode = currentRx.mode;
-    const pattern = ex.pattern;
-    const isLower = Engine.isLowerPattern(pattern);
-
-    // Bodyweight: log only, simple reps progression (no %1RM, no estimate).
-    if (currentRx.bodyweight) {
-      Data.addLog({ exerciseId: ex.id, date: new Date().toISOString(), sets, sessionEstimate1RM: null, trusted: false });
-      finishSave("Logged 💪 Beat it next time.");
-      return;
-    }
-
-    const repLow = currentRx.repLow, repHigh = currentRx.repHigh;
-    const prescribedTotal = currentRx.totalLoad;
-    const resolvedBefore = Data.resolve1RM(ex);
-
-    // §1.1 per-set estimates; session estimate = best TRUSTED estimate.
-    const ests = sets.map((s) => Engine.estimate1RM(s.weight, s.reps, s.rir));
-    const trustedEsts = ests.filter((e) => e.trusted).map((e) => e.oneRM);
-    const trusted = trustedEsts.length > 0;
-    const sessionEstimate1RM = trusted ? Math.max(...trustedEsts) : null;
-
-    Data.addLog({ exerciseId: ex.id, date: new Date().toISOString(), sets, sessionEstimate1RM, trusted, prescribedTotal, mode, deload: !!currentRx.deload });
-
-    if (currentRx.deload) {
-      // One deload session done → clear flag, record event, resume from deloaded weight.
-      Data.setPatternDeloadPending(pattern, false);
-      Data.addDeload(pattern);
-      Data.setExerciseState(ex.id, { nextWeightTotal: prescribedTotal, lastAction: "hold_push_reps", lastPrescribedTotal: prescribedTotal });
-      finishSave("Deload done — back to building.");
-      return;
-    }
-
-    const st = Data.exerciseState(ex.id);
-    const prevPrescribed = st && st.lastPrescribedTotal != null ? st.lastPrescribedTotal : 0;
-
-    if (trusted) {
-      // §1.5 blend the per-exercise correction (trusted only).
-      const base1RM = Data.correction(ex.id) != null ? Data.correction(ex.id) : resolvedBefore;
-      Data.setCorrection(ex.id, Engine.updateEstimate(base1RM, sessionEstimate1RM));
-      // Re-derive the pattern estimate by back-propagating through the coefficient.
-      if (ex.coeff) {
-        const impliedPattern = sessionEstimate1RM / ex.coeff;
-        Data.setPatternEstimate(pattern, impliedPattern, { ema: true, addedLoad: prescribedTotal > prevPrescribed });
-      }
-    }
-
-    // §1.5 double progression (runs regardless of trust — it's pure load logic).
-    const hitAll = sets.every((s) => s.reps >= repHigh);
-    const minRir = Math.min(...sets.map((s) => s.rir));
-    const missedLow = sets.some((s) => s.reps < repLow);
-    const np = Engine.nextProgression({
-      mode, loadType: ex.loadType, isLowerBarbell: isLower,
-      prescribedWeightTotal: prescribedTotal, repHigh,
-      hitAllSetsAtRepHigh: hitAll, minRirAcrossSets: minRir, missedRepLow: missedLow,
-    });
-    Data.setExerciseState(ex.id, { nextWeightTotal: np.nextWeightTotal, lastAction: np.action, lastPrescribedTotal: prescribedTotal });
-
-    // §1.7 deload check for the pattern (only meaningful once history exists).
-    const rec = Data.patternRecord(pattern);
-    const dl = Engine.checkDeload({ storedHistory: rec.history, addedLoadFlags: rec.addedFlags, weeksSinceLastDeload: Data.weeksSinceLastDeload(pattern) });
-    if (dl.deload) Data.setPatternDeloadPending(pattern, true);
-
-    const msg = {
-      add_load: "Saved — you earned more weight next time. 💪",
-      hold_push_reps: "Saved — same weight, chase the reps next time.",
-      hold_retry: "Saved — we'll retry this weight.",
-    }[np.action] || "Session saved.";
-    finishSave(dl.deload ? `Saved. Heads up: a deload is queued (${dl.reason}).` : msg);
-  }
-
-  function finishSave(msg) {
-    renderAll();
-    buildPrescription(); // refresh the card to reflect the new state
-    toast(msg);
-  }
-
-  /* ============================================================
-     IDENTIFY (AI — metadata only)
-     ============================================================ */
-  function readPhoto(file) {
-    const reader = new FileReader();
-    reader.onload = () => { pendingPhoto = reader.result; $("#identifyStatus").textContent = "📷 photo ready — tap Identify"; };
-    reader.readAsDataURL(file);
-  }
-
-  async function onIdentify() {
-    const name = $("#exType").value.trim();
-    if (!name && !pendingPhoto) { toast("Type a name or add a photo"); return; }
-    const s = Data.settings();
-    if (!s.apiKey) { openSettings(); toast("Add your Anthropic API key to identify exercises"); return; }
-
-    const btn = $("#identifyBtn");
-    btn.disabled = true;
-    $("#identifyStatus").innerHTML = `<span class="spinner"></span>Identifying…`;
-    try {
-      const r = await Recognize.identify({ name, imageDataUrl: pendingPhoto, apiKey: s.apiKey, model: s.model });
-      pendingIdentified = r;
-      $("#identifyStatus").textContent = "";
-      const coeffTxt = r.coeff == null ? "bodyweight" : `coeff ${round1(r.coeff)}`;
-      $("#identifyResult").innerHTML =
-        `<div class="ir-name">${escapeHtml(r.name)}<span class="ir-conf ${r.confidence}">${r.confidence}</span></div>` +
-        `<div class="ir-meta">${titleCasePattern(r.pattern)} · ${r.loadType.replace("_", " ")} · ${coeffTxt}</div>` +
-        `<p class="ir-notes">${escapeHtml(r.notes || "")}</p>` +
-        `<div class="ir-actions"><button class="btn primary" id="addIdentified">Add &amp; train this</button>` +
-        `<button class="btn ghost" id="dismissIdentified">Not quite</button></div>`;
-      $("#identifyResult").classList.remove("hidden");
-      $("#addIdentified").addEventListener("click", addIdentified);
-      $("#dismissIdentified").addEventListener("click", () => { $("#identifyResult").classList.add("hidden"); pendingIdentified = null; });
-    } catch (err) {
-      $("#identifyStatus").textContent = "";
-      if (err.message === "NO_KEY") openSettings();
-      else if (err.status === 401) { toast("API key rejected — check AI settings"); openSettings(); }
-      else toast(err.message || "Could not identify that");
-    } finally {
-      btn.disabled = false;
-    }
-  }
-
-  function addIdentified() {
-    if (!pendingIdentified) return;
-    const r = pendingIdentified;
-    const ex = Data.addCustomExercise({ name: r.name, pattern: r.pattern, coeff: r.coeff, loadType: r.loadType });
-    renderExerciseSelect();
-    $("#exSelect").value = ex.id;
-    pendingPhoto = null;
-    $("#exType").value = "";
-    $("#identifyResult").classList.add("hidden");
-    selectExercise(ex);
-    toast(`Added ${ex.name}`);
-  }
-
-  /* ============================================================
-     PROGRESS (§5)
-     ============================================================ */
-  function loggedExercises() {
-    const ids = [...new Set(Data.allLogs().map((l) => l.exerciseId))];
-    return ids.map((id) => Data.getExercise(id)).filter(Boolean);
-  }
-
-  function renderProgress() {
-    const sel = $("#progressExercise");
-    const exs = loggedExercises();
-    const prev = sel.value;
-    sel.innerHTML = "";
-    if (!exs.length) {
-      sel.innerHTML = `<option value="">No data yet</option>`;
-      $("#progressStats").innerHTML = "";
-      $("#chart").innerHTML = `<p class="empty">Log sessions to see your strength curve.</p>`;
-      $("#progressHistory").innerHTML = "";
-      return;
-    }
-    exs.forEach((e) => { const o = document.createElement("option"); o.value = e.id; o.textContent = e.name; sel.appendChild(o); });
-    if (prev && exs.some((e) => e.id === prev)) sel.value = prev;
-
-    const ex = Data.getExercise(sel.value) || exs[0];
-    const logs = Data.logsForExercise(ex.id);
-    renderProgressStats(ex, logs);
-    renderChart(ex, logs);
-    $("#progressHistory").innerHTML = logs.slice().reverse().map(sessionCard).join("");
-  }
-
-  function renderProgressStats(ex, logs) {
-    const el = $("#progressStats");
-    if (!logs.length) { el.innerHTML = ""; return; }
-    const ests = logs.map((l) => l.sessionEstimate1RM).filter((v) => v != null);
-    const bestE = ests.length ? Math.max(...ests) : null;
-    const bestW = Math.max(...logs.flatMap((l) => l.sets.map((s) => Engine.toDisplayLoad(s.weight, ex.loadType))));
-    const vol = logs.reduce((t, l) => t + l.sets.reduce((a, s) => a + s.weight * s.reps, 0), 0);
-    const stat = (v, k) => `<div class="stat"><div class="val">${v}</div><div class="lbl">${k}</div></div>`;
-    el.innerHTML =
-      (bestE != null ? stat(round1(bestE) + " lb", "Best est. 1RM") : "") +
-      stat(round1(bestW) + (ex.loadType === "dumbbell_pair" ? " lb/hd" : " lb"), "Heaviest set") +
-      stat(round1(vol) + " lb", "Total volume") +
-      stat(logs.length, "Sessions");
-  }
-
-  function renderChart(ex, logs) {
-    const el = $("#chart");
-    const series = logs.map((l) => ({
-      date: l.date,
-      e1rm: l.sessionEstimate1RM,
-      volume: l.sets.reduce((t, s) => t + s.weight * s.reps, 0),
+  function wireOnboard() {
+    $$("#obBody [data-chips]").forEach((row) => row.addEventListener("click", (e) => {
+      const c = e.target.closest(".chip"); if (!c) return;
+      ob.draft[row.dataset.chips] = c.dataset.v;
+      $$(".chip", row).forEach((x) => x.classList.toggle("active", x === c));
     }));
-    const pts = series.map((s) => ({ date: s.date, y: progressMetric === "volume" ? s.volume : s.e1rm }))
-      .filter((p) => p.y != null);
-    if (pts.length < 1) { el.innerHTML = `<p class="empty">Not enough trusted data for this view yet.</p>`; return; }
-
-    const W = 680, H = 240, padL = 46, padR = 16, padT = 18, padB = 28;
-    const ys = pts.map((p) => p.y);
-    let minY = Math.min(...ys), maxY = Math.max(...ys);
-    if (minY === maxY) { minY = Math.max(0, minY - 1); maxY += 1; }
-    const padY = (maxY - minY) * 0.12; minY = Math.max(0, minY - padY); maxY += padY;
-    const n = pts.length;
-    const sx = (i) => padL + (n === 1 ? (W - padL - padR) / 2 : (i / (n - 1)) * (W - padL - padR));
-    const sy = (y) => padT + (1 - (y - minY) / (maxY - minY)) * (H - padT - padB);
-
-    let grid = "";
-    for (let i = 0; i <= 4; i++) {
-      const y = padT + (i / 4) * (H - padT - padB);
-      const val = round1(maxY - (i / 4) * (maxY - minY));
-      grid += `<line x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}" stroke="#334155"/><text x="${padL - 8}" y="${y + 4}" text-anchor="end" fill="#64748b" font-size="11">${val}</text>`;
-    }
-    const line = pts.map((p, i) => `${i === 0 ? "M" : "L"} ${sx(i).toFixed(1)} ${sy(p.y).toFixed(1)}`).join(" ");
-    const area = `${line} L ${sx(n - 1).toFixed(1)} ${(H - padB).toFixed(1)} L ${sx(0).toFixed(1)} ${(H - padB).toFixed(1)} Z`;
-    const dots = pts.map((p, i) => `<circle cx="${sx(i).toFixed(1)}" cy="${sy(p.y).toFixed(1)}" r="4" fill="#38bdf8" stroke="#0f172a" stroke-width="2"><title>${round1(p.y)} · ${fmtDate(p.date)}</title></circle>`).join("");
-
-    // deload markers for this exercise's pattern
-    const deloads = Data.deloadsFor(ex.pattern);
-    const t0 = new Date(pts[0].date).getTime(), t1 = new Date(pts[n - 1].date).getTime();
-    const markers = deloads.map((d) => {
-      const t = new Date(d.date).getTime();
-      if (t1 === t0) return "";
-      const frac = Math.max(0, Math.min(1, (t - t0) / (t1 - t0)));
-      const x = padL + frac * (W - padL - padR);
-      return `<polygon class="svg-deload" points="${x - 5},${padT} ${x + 5},${padT} ${x},${padT + 9}"><title>Deload · ${fmtDate(d.date)}</title></polygon><line x1="${x}" y1="${padT}" x2="${x}" y2="${H - padB}" stroke="#facc15" stroke-dasharray="3 3" opacity="0.5"/>`;
-    }).join("");
-
-    const xl = `<text x="${sx(0)}" y="${H - 8}" text-anchor="middle" fill="#64748b" font-size="11">${fmtDate(pts[0].date)}</text>` +
-      (n > 1 ? `<text x="${sx(n - 1)}" y="${H - 8}" text-anchor="middle" fill="#64748b" font-size="11">${fmtDate(pts[n - 1].date)}</text>` : "");
-    el.innerHTML =
-      `<svg viewBox="0 0 ${W} ${H}" role="img"><defs><linearGradient id="grad" x1="0" y1="0" x2="0" y2="1">` +
-      `<stop offset="0%" stop-color="#38bdf8" stop-opacity="0.35"/><stop offset="100%" stop-color="#38bdf8" stop-opacity="0"/></linearGradient></defs>` +
-      grid + `<path d="${area}" fill="url(#grad)"/><path d="${line}" fill="none" stroke="#38bdf8" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>` +
-      markers + dots + xl + `</svg>`;
+    const next = $("#obNext");
+    if (next) next.addEventListener("click", () => {
+      if (ob.step === 0) {
+        ob.draft.weightLb = parseFloat($("#obW").value) || null;
+        ob.draft.heightCm = ftInToCm($("#obFt").value, $("#obIn").value);
+        if (!ob.draft.sex) ob.draft.sex = "";
+      } else if (ob.step === 1) { ob.draft.known = $("#obKnown").value.trim(); }
+      ob.step++; renderOnboard();
+    });
+    const skip = $("#obSkip");
+    if (skip) skip.addEventListener("click", () => { if (ob.step === 1) ob.draft.known = ($("#obKnown") || {}).value || ob.draft.known; ob.step++; if (ob.step > 2) finishOnboard(); else renderOnboard(); });
+    const done = $("#obDone");
+    if (done) done.addEventListener("click", () => { store.settings.apiKey = ($("#obKey").value || "").trim(); finishOnboard(); });
   }
+  function finishOnboard() {
+    Object.assign(store.profile, ob.draft);
+    store.onboarded = true; save();
+    $("#onboard").classList.add("hidden");
+    renderAll();
+    toast("You're set. Tell me what you're training 💪");
+  }
+
+  /* ============================================================
+     TODAY — coaching
+     ============================================================ */
+  function setStatus(html) { const s = $("#status"); if (html == null) { s.classList.add("hidden"); s.innerHTML = ""; } else { s.classList.remove("hidden"); s.innerHTML = html; } }
+  function loadingCycle(msgs) {
+    let i = 0; const show = () => setStatus(`<span class="spinner"></span><span class="pulse">${esc(msgs[i])}</span>`);
+    show(); const t = setInterval(() => { i = (i + 1) % msgs.length; show(); }, 1600);
+    return () => clearInterval(t);
+  }
+
+  async function runCoach() {
+    if (!ensureReady()) return;
+    const name = $("#exInput").value.trim();
+    if (!name && !pendingPhoto) { toast("Type an exercise or add a photo"); return; }
+    const src = { name, image: pendingPhoto };
+    const adapted = buildHistory(name).thisExercise.length > 0;
+    $("#result").innerHTML = "";
+    const stop = loadingCycle(["Reading your history…", "Sizing you up…", "Choosing your weights…"]);
+    try {
+      const rx = await AI.coach({
+        profile: store.profile, exerciseName: name, imageDataUrl: pendingPhoto,
+        history: buildHistory(name), apiKey: store.settings.apiKey, model: store.settings.model,
+      });
+      stop(); setStatus(null); clearPhoto();
+      $("#result").appendChild(exerciseCard(rx, { standalone: true, src, adapted }));
+    } catch (e) { stop(); handleErr(e); }
+  }
+
+  async function runPlan() {
+    if (!ensureReady()) return;
+    if (!pendingFocus) { toast("Pick a focus"); return; }
+    $("#result").innerHTML = "";
+    const stop = loadingCycle([`Planning your ${pendingFocus.toLowerCase()} day…`, "Picking your lifts…", "Setting your weights…"]);
+    try {
+      const recent = store.sessions.slice(-8).map((s) => ({ name: s.name, date: s.date.slice(0, 10) }));
+      const plan = await AI.plan({ profile: store.profile, focus: pendingFocus, history: { recentSessions: recent }, apiKey: store.settings.apiKey, model: store.settings.model });
+      stop(); setStatus(null);
+      const head = document.createElement("div");
+      head.className = "notice";
+      head.innerHTML = `<b>${esc(plan.title)}</b><br>${esc(plan.note)}`;
+      $("#result").appendChild(head);
+      plan.exercises.forEach((ex) => $("#result").appendChild(exerciseCard(ex, { standalone: false })));
+    } catch (e) { stop(); handleErr(e); }
+  }
+
+  function ensureReady() {
+    if (!hasKey()) { switchView("me"); toast("Add your API key to start coaching"); return false; }
+    if (!profileReady()) { switchView("me"); toast("Fill in your profile first"); return false; }
+    return true;
+  }
+  function handleErr(e) {
+    setStatus(null);
+    if (e.message === "NO_KEY") { switchView("me"); toast("Add your API key in Me"); }
+    else if (e.status === 401) { switchView("me"); toast("API key rejected — check it in Me"); }
+    else toast(e.message || "Something went wrong");
+  }
+
+  /* ---------- exercise card ---------- */
+  function exerciseCard(rx, ctx) {
+    ctx = ctx || {};
+    const el = document.createElement("div");
+    el.className = "exercise-card";
+    el._rx = rx;
+    el._src = ctx.src || null;
+
+    const oneRm = rx.estimatedOneRepMax ? `<div class="xc-1rm"><b>${round(rx.estimatedOneRepMax)}</b><small>est 1RM · lb</small></div>` : "";
+    const cues = (rx.cues || []).map((c) => `<span class="cue">${esc(c)}</span>`).join("");
+    const warm = (rx.warmup || []);
+    const work = (rx.workingSets || []);
+    const badge = !ctx.standalone ? "" :
+      ctx.adapted ? `<span class="badge adapt">↗ Adapted from last time</span>` : `<span class="badge first">Starting point</span>`;
+    const feelerHint = rx.readiness === "needs_feeler" ? `<div class="redial-hint">New or hard-to-gauge lift — do set 1, then re-dial to lock your weight.</div>` : "";
+
+    el.innerHTML =
+      `<div class="xc-head">${oneRm}<div class="xc-title">${esc(rx.resolvedName)}</div>` +
+      `<div class="xc-sub">${esc(rx.muscleGroup)} · ${esc(rx.equipment)}${rx.perHand ? " · per hand" : ""}</div></div>` +
+      `<div class="xc-body">` +
+      badge +
+      (rx.rationale ? `<div class="rationale">${esc(rx.rationale)}</div>` : "") +
+      (cues ? `<div class="cues">${cues}</div>` : "") +
+      (warm.length ? `<div class="setgroup-label">Warm-up</div>` + warm.map((s, i) => setRow(s, i, true, rx.perHand)).join("") : "") +
+      `<div class="setgroup-label">Working sets · ${wUnit(rx.perHand)}</div>` +
+      work.map((s, i) => setRow(s, i, false, rx.perHand)).join("") +
+      `<button class="redial" data-act="feeler">🎯 Too heavy or light? Do set 1 &amp; re-dial</button>` +
+      feelerHint +
+      `<div class="card-actions">` +
+      `<button class="cta small" data-act="save">Log session</button>` +
+      (ctx.standalone && ctx.src ? `<button class="regen" data-act="regen" title="Regenerate">↻</button>` : "") +
+      `</div>` +
+      `</div>`;
+
+    el.addEventListener("click", (e) => {
+      const done = e.target.closest(".donebtn");
+      if (done) { done.closest(".setrow").classList.toggle("done"); return; }
+      const act = e.target.closest("[data-act]");
+      if (!act) return;
+      if (act.dataset.act === "save") saveCard(el);
+      else if (act.dataset.act === "feeler") feelerDialIn(el);
+      else if (act.dataset.act === "regen") regenerateCard(el);
+    });
+    return el;
+  }
+
+  async function regenerateCard(el) {
+    const src = el._src; if (!src) return;
+    const btn = $('[data-act="regen"]', el); btn.textContent = "…"; btn.disabled = true;
+    try {
+      const rx = await AI.coach({
+        profile: store.profile, exerciseName: src.name, imageDataUrl: src.image,
+        history: buildHistory(src.name), apiKey: store.settings.apiKey, model: store.settings.model,
+      });
+      el.replaceWith(exerciseCard(rx, { standalone: true, src, adapted: buildHistory(src.name).thisExercise.length > 0 }));
+    } catch (e) { btn.textContent = "↻"; btn.disabled = false; handleErr(e); }
+  }
+
+  function setRow(s, i, warm, perHand) {
+    return `<div class="setrow ${warm ? "warm" : ""}" data-warm="${warm ? 1 : 0}">` +
+      `<span class="setnum">${warm ? "W" : i + 1}</span>` +
+      `<input class="s-w" type="number" step="0.5" value="${s.weight}" />` +
+      `<span class="x">×</span>` +
+      `<input class="s-r" type="number" step="1" value="${s.reps}" />` +
+      (warm ? `<span class="unit">warm</span>` : rirSelect(s.targetRIR != null ? s.targetRIR : 1)) +
+      `<button class="donebtn" title="Done">✓</button>` +
+    `</div>`;
+  }
+
+  function readSets(el, workingOnly) {
+    return $$(".setrow", el).filter((r) => !workingOnly || r.dataset.warm === "0").map((r) => ({
+      warm: r.dataset.warm === "1",
+      weight: parseFloat($(".s-w", r).value),
+      reps: parseInt($(".s-r", r).value, 10),
+      rir: $(".s-rir", r) ? parseInt($(".s-rir", r).value, 10) : null,
+      done: r.classList.contains("done"),
+    }));
+  }
+
+  async function feelerDialIn(el) {
+    const rx = el._rx;
+    const first = $$(".setrow", el).find((r) => r.dataset.warm === "0");
+    if (!first) return;
+    const feeler = { weight: parseFloat($(".s-w", first).value), reps: parseInt($(".s-r", first).value, 10), rir: $(".s-rir", first) ? parseInt($(".s-rir", first).value, 10) : 1 };
+    if (!(feeler.weight >= 0) || !(feeler.reps > 0)) { toast("Log your first set, then dial in"); return; }
+    const btn = $('[data-act="feeler"]', el); const prev = btn.textContent;
+    btn.textContent = "Dialing in…"; btn.disabled = true;
+    try {
+      const nrx = await AI.coach({
+        profile: store.profile, exerciseName: rx.resolvedName, history: buildHistory(rx.resolvedName),
+        feeler, apiKey: store.settings.apiKey, model: store.settings.model,
+      });
+      const fresh = exerciseCard(nrx, { standalone: !!el._src, src: el._src, adapted: buildHistory(nrx.resolvedName).thisExercise.length > 0 });
+      el.replaceWith(fresh);
+      toast("Dialed in from your set 💪");
+    } catch (e) { btn.textContent = prev; btn.disabled = false; handleErr(e); }
+  }
+
+  function saveCard(el) {
+    const rx = el._rx;
+    const logged = readSets(el, true).filter((s) => s.reps > 0 && s.weight >= 0)
+      .map((s) => ({ weight: s.weight, reps: s.reps, rir: s.rir == null ? null : s.rir }));
+    if (!logged.length) { toast("Log at least one working set"); return; }
+    store.sessions.push({
+      id: uid(), name: rx.resolvedName, muscleGroup: rx.muscleGroup, equipment: rx.equipment, perHand: rx.perHand,
+      date: new Date().toISOString(), warmup: rx.warmup || [], workingSets: rx.workingSets || [],
+      logged, estimatedOneRepMax: rx.estimatedOneRepMax || null, rationale: rx.rationale || "",
+    });
+    save();
+    el.querySelector(".card-actions").innerHTML = `<div class="notice" style="width:100%">✓ Logged. Next time I'll push you harder or back off based on how that felt.</div>`;
+    $("[data-act='feeler']", el)?.remove();
+    renderHistory();
+    toast("Logged 💪");
+  }
+
+  /* ============================================================
+     HISTORY + CHART
+     ============================================================ */
+  function renderHistory() {
+    const list = $("#historyList");
+    const sorted = store.sessions.slice().sort((a, b) => new Date(b.date) - new Date(a.date));
+    list.innerHTML = sorted.length ? sorted.map(sessionCard).join("") : `<p class="empty">No sessions yet.</p>`;
+    // trend select
+    const names = [...new Set(store.sessions.map((s) => s.name))];
+    const sel = $("#trendExercise");
+    const prev = sel.value;
+    sel.innerHTML = names.length ? names.map((n) => `<option>${esc(n)}</option>`).join("") : `<option>—</option>`;
+    if (prev && names.includes(prev)) sel.value = prev;
+    renderChart();
+  }
+  function sessionCard(s) {
+    const pills = s.logged.map((x) => `<span class="pill">${round(x.weight)}${s.perHand ? "/h" : ""}×${x.reps}${x.rir != null ? ` @${x.rir}` : ""}</span>`).join("");
+    const vol = s.logged.reduce((t, x) => t + x.weight * x.reps * (s.perHand ? 2 : 1), 0);
+    return `<div class="session"><div class="session-head"><span class="name">${esc(s.name)}</span><span class="date">${fmtDate(s.date)}</span></div>` +
+      `<div class="session-sets">${pills}</div><div class="session-meta"><span>Vol ${round(vol)} lb</span>${s.estimatedOneRepMax ? `<span>Est 1RM ${round(s.estimatedOneRepMax)} lb</span>` : ""}</div></div>`;
+  }
+
+  function renderChart() {
+    const el = $("#chart");
+    const name = $("#trendExercise").value;
+    const sess = store.sessions.filter((s) => s.name === name).sort((a, b) => new Date(a.date) - new Date(b.date));
+    const pts = sess.map((s) => ({
+      date: s.date,
+      y: trendMetric === "volume" ? s.logged.reduce((t, x) => t + x.weight * x.reps * (s.perHand ? 2 : 1), 0) : s.estimatedOneRepMax,
+    })).filter((p) => p.y != null);
+    if (pts.length < 1) { el.innerHTML = `<p class="empty">Log sessions to see your trend.</p>`; return; }
+
+    const W = 620, H = 200, pl = 40, pr = 12, pt = 14, pb = 24;
+    const ys = pts.map((p) => p.y); let mn = Math.min(...ys), mx = Math.max(...ys);
+    if (mn === mx) { mn = Math.max(0, mn - 1); mx += 1; }
+    const py = (mx - mn) * 0.15; mn = Math.max(0, mn - py); mx += py;
+    const n = pts.length;
+    const sx = (i) => pl + (n === 1 ? (W - pl - pr) / 2 : (i / (n - 1)) * (W - pl - pr));
+    const sy = (y) => pt + (1 - (y - mn) / (mx - mn)) * (H - pt - pb);
+    let grid = "";
+    for (let i = 0; i <= 3; i++) {
+      const y = pt + (i / 3) * (H - pt - pb);
+      const val = round(mx - (i / 3) * (mx - mn));
+      grid += `<line x1="${pl}" y1="${y}" x2="${W - pr}" y2="${y}" stroke="#26314f"/>` +
+        `<text x="${pl - 6}" y="${y + 4}" text-anchor="end" fill="#5b6988" font-size="10">${val}</text>`;
+    }
+    const line = pts.map((p, i) => `${i ? "L" : "M"} ${sx(i).toFixed(1)} ${sy(p.y).toFixed(1)}`).join(" ");
+    const area = `${line} L ${sx(n - 1).toFixed(1)} ${H - pb} L ${sx(0).toFixed(1)} ${H - pb} Z`;
+    const dots = pts.map((p, i) => `<circle cx="${sx(i).toFixed(1)}" cy="${sy(p.y).toFixed(1)}" r="4" fill="#33d6c0" stroke="#0b1020" stroke-width="2"><title>${round(p.y)} · ${fmtDate(p.date)}</title></circle>`).join("");
+    el.innerHTML = `<svg viewBox="0 0 ${W} ${H}"><defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#33d6c0" stop-opacity=".35"/><stop offset="100%" stop-color="#33d6c0" stop-opacity="0"/></linearGradient></defs>${grid}<path d="${area}" fill="url(#g)"/><path d="${line}" fill="none" stroke="#33d6c0" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>${dots}</svg>`;
+  }
+
+  /* ============================================================
+     ME
+     ============================================================ */
+  function renderMe() {
+    const p = store.profile;
+    setChips("#meSex", p.sex); setChips("#meExp", p.experience); setChips("#meGoal", p.goal);
+    $("#meWeight").value = p.weightLb || "";
+    const h = cmToFtIn(p.heightCm); $("#meFt").value = h.ft; $("#meIn").value = h.in;
+    $("#meKnown").value = p.known || "";
+    $("#meKey").value = store.settings.apiKey;
+    $("#meModel").value = store.settings.model;
+  }
+  function setChips(sel, val) { $$(`${sel} .chip`).forEach((c) => c.classList.toggle("active", c.dataset.v === val)); }
+  function chipVal(sel) { const c = $(`${sel} .chip.active`); return c ? c.dataset.v : ""; }
+
+  /* ============================================================
+     RENDER + NAV
+     ============================================================ */
+  function renderAll() { renderToday(); renderHistory(); renderMe(); }
+  function renderToday() {
+    const p = store.profile;
+    $("#hello").textContent = p.sex || p.weightLb ? "Ready to train?" : "Welcome";
+    $("#subhello").textContent = hasKey() ? "Tell me what you're doing." : "Connect your coach to start.";
+    $("#keyBanner").classList.toggle("hidden", hasKey());
+    // recent-exercise quick chips (unique, most-recent first)
+    const seen = new Set(); const recent = [];
+    store.sessions.slice().reverse().forEach((s) => { const k = s.name.toLowerCase(); if (!seen.has(k)) { seen.add(k); recent.push(s.name); } });
+    $("#recentChips").innerHTML = recent.slice(0, 6).map((n) => `<button class="chip" data-recent="${esc(n)}">${esc(n)}</button>`).join("");
+  }
+  function switchView(v) {
+    $$(".navbtn").forEach((b) => b.classList.toggle("active", b.dataset.view === v));
+    $$(".view").forEach((s) => s.classList.toggle("active", s.id === `view-${v}`));
+    if (v === "today") renderToday();
+    if (v === "history") renderHistory();
+    if (v === "me") renderMe();
+  }
+
+  /* ---------- photo ---------- */
+  function handlePhoto(file) {
+    const img = new Image();
+    const rd = new FileReader();
+    rd.onload = () => { img.onload = () => downscale(img); img.src = rd.result; };
+    rd.readAsDataURL(file);
+  }
+  function downscale(img) {
+    const max = 1024;
+    let { width: w, height: h } = img;
+    if (w > max || h > max) { const r = Math.min(max / w, max / h); w = Math.round(w * r); h = Math.round(h * r); }
+    const c = document.createElement("canvas"); c.width = w; c.height = h;
+    c.getContext("2d").drawImage(img, 0, 0, w, h);
+    pendingPhoto = c.toDataURL("image/jpeg", 0.82);
+    $("#photoChip").innerHTML = `📷 photo attached <button id="rmPhoto">✕</button>`;
+    $("#photoChip").classList.remove("hidden");
+    $("#rmPhoto").addEventListener("click", clearPhoto);
+  }
+  function clearPhoto() { pendingPhoto = null; $("#photoChip").classList.add("hidden"); $("#photoChip").innerHTML = ""; }
 
   /* ============================================================
      EVENTS
      ============================================================ */
-  function switchView(view) {
-    $$(".tab").forEach((t) => t.classList.toggle("active", t.dataset.view === view));
-    $$(".view").forEach((v) => v.classList.toggle("active", v.id === `view-${view}`));
-    if (view === "progress") renderProgress();
-  }
+  function bind() {
+    $("#nav").addEventListener("click", (e) => { const b = e.target.closest(".navbtn"); if (b) switchView(b.dataset.view); });
+    $("#meBtn").addEventListener("click", () => switchView("me"));
 
-  function bindEvents() {
-    $("#tabs").addEventListener("click", (e) => { const b = e.target.closest(".tab"); if (b) switchView(b.dataset.view); });
-
-    $("#profFt").addEventListener("input", () => { $("#profFt").dataset.touched = "1"; });
-    $("#profIn").addEventListener("input", () => { $("#profFt").dataset.touched = "1"; });
-    $("#profWeight").addEventListener("input", () => { $("#profWeight").dataset.touched = "1"; });
-    $("#profileForm").addEventListener("submit", saveProfile);
-
-    $("#calibList").addEventListener("click", (e) => { const b = e.target.closest(".ci-save"); if (b) saveCalibration(b.dataset.pattern); });
-
-    $("#exSelect").addEventListener("change", (e) => {
-      const ex = Data.getExercise(e.target.value);
-      if (ex) selectExercise(ex); else { currentExercise = null; $("#prescribePanel").classList.add("hidden"); }
+    $("#modeSeg").addEventListener("click", (e) => {
+      const b = e.target.closest(".seg"); if (!b) return;
+      mode = b.dataset.mode;
+      $$(".seg").forEach((s) => s.classList.toggle("active", s === b));
+      $("#singleEntry").classList.toggle("hidden", mode !== "single");
+      $("#planEntry").classList.toggle("hidden", mode !== "plan");
+      $("#result").innerHTML = ""; setStatus(null);
     });
-    $("#trainMode").addEventListener("change", () => { $("#trainMode").dataset.touched = "1"; if (currentExercise) buildPrescription(); });
 
-    $("#photoBtn").addEventListener("click", () => $("#photoInput").click());
-    $("#photoInput").addEventListener("change", (e) => { if (e.target.files[0]) readPhoto(e.target.files[0]); e.target.value = ""; });
-    $("#identifyBtn").addEventListener("click", onIdentify);
-    $("#exType").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); onIdentify(); } });
+    $("#coachBtn").addEventListener("click", runCoach);
+    $("#exInput").addEventListener("keydown", (e) => { if (e.key === "Enter") runCoach(); });
+    $("#recentChips").addEventListener("click", (e) => { const c = e.target.closest("[data-recent]"); if (!c) return; $("#exInput").value = c.dataset.recent; runCoach(); });
+    $("#keyBannerBtn").addEventListener("click", () => switchView("me"));
+    $("#camBtn").addEventListener("click", () => $("#photoInput").click());
+    $("#photoInput").addEventListener("change", (e) => { if (e.target.files[0]) handlePhoto(e.target.files[0]); e.target.value = ""; });
 
-    $("#addSetBtn").addEventListener("click", () => {
-      const ex = currentExercise; if (!ex || !currentRx) return;
-      const li = document.createElement("li");
-      const i = $$("#logSets li").length;
-      const bw = ex.loadType === "bodyweight";
-      li.innerHTML = logRow(i, bw ? { reps: currentRx.repTarget, rir: 1 } : { reps: currentRx.repLow, rir: 1, w: displayWeight(ex.loadType, currentRx.totalLoad) }, bw, ex.loadType).replace(/^<li>|<\/li>$/g, "");
-      $("#logSets").appendChild(li);
+    $("#focusChips").addEventListener("click", (e) => {
+      const c = e.target.closest(".chip"); if (!c) return;
+      pendingFocus = c.dataset.focus;
+      $$("#focusChips .chip").forEach((x) => x.classList.toggle("active", x === c));
+      $("#planBtn").disabled = false;
     });
-    $("#saveSessionBtn").addEventListener("click", saveSession);
+    $("#planBtn").addEventListener("click", runPlan);
 
-    $("#progressExercise").addEventListener("change", renderProgress);
-    $$(".chart-tabs .chip").forEach((c) => c.addEventListener("click", () => {
-      $$(".chart-tabs .chip").forEach((x) => x.classList.remove("active"));
-      c.classList.add("active"); progressMetric = c.dataset.metric; renderProgress();
+    $("#trendExercise").addEventListener("change", renderChart);
+    $$(".chart-tabs .chip2").forEach((c) => c.addEventListener("click", () => { $$(".chart-tabs .chip2").forEach((x) => x.classList.remove("active")); c.classList.add("active"); trendMetric = c.dataset.metric; renderChart(); }));
+
+    // Me
+    $$("#meSex .chip, #meExp .chip, #meGoal .chip").forEach((c) => c.addEventListener("click", () => {
+      const wrap = c.parentElement; $$(".chip", wrap).forEach((x) => x.classList.toggle("active", x === c));
     }));
-
-    $("#dataMenuBtn").addEventListener("click", (e) => { e.stopPropagation(); $("#dataMenu").classList.toggle("hidden"); });
-    document.addEventListener("click", () => $("#dataMenu").classList.add("hidden"));
-    $("#dataMenu").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) handleData(b.dataset.action); });
-    $("#importFile").addEventListener("change", importData);
-
-    $("#closeSettings").addEventListener("click", () => $("#settingsModal").classList.add("hidden"));
-    $("#saveSettings").addEventListener("click", saveSettings);
-    $("#settingsModal").addEventListener("click", (e) => { if (e.target.id === "settingsModal") $("#settingsModal").classList.add("hidden"); });
-  }
-
-  function saveProfile(e) {
-    e.preventDefault();
-    Data.setUser({
-      heightCm: ftInToCm($("#profFt").value, $("#profIn").value),
-      weightLb: parseFloat($("#profWeight").value) || null,
-      defaultMode: $("#profMode").value,
+    $("#saveMe").addEventListener("click", () => {
+      store.profile = { sex: chipVal("#meSex"), weightLb: parseFloat($("#meWeight").value) || null, heightCm: ftInToCm($("#meFt").value, $("#meIn").value), experience: chipVal("#meExp") || "Beginner", goal: chipVal("#meGoal") || "Build muscle", known: $("#meKnown").value.trim() };
+      save(); renderToday(); toast("Profile saved");
     });
-    $("#profFt").dataset.touched = ""; $("#profWeight").dataset.touched = "";
-    renderProfile(); renderCalibration(); renderModeSelectors();
-    toast("Profile saved");
+    $("#saveKey").addEventListener("click", () => { store.settings = { apiKey: $("#meKey").value.trim(), model: $("#meModel").value }; save(); renderToday(); toast("Saved"); });
+
+    $$("[data-data]").forEach((b) => b.addEventListener("click", () => dataAction(b.dataset.data)));
+    $("#importFile").addEventListener("change", importData);
   }
 
-  function saveCalibration(pattern) {
-    const form = $(`.ci-form[data-pattern="${pattern}"]`);
-    const w = parseFloat($(".ci-w", form).value);
-    const r = parseInt($(".ci-r", form).value, 10);
-    const rir = parseInt($(".ci-rir", form).value, 10) || 0;
-    if (!(w >= 0) || !(r > 0)) { toast("Enter the weight and reps you hit"); return; }
-    const est = Engine.estimate1RM(w, r, rir);
-    if (!est.trusted) { toast(`That's ${est.effectiveReps} effective reps — keep calibration to ≤12 (5–8 reps, low RIR)`); return; }
-    const first = Data.patternEstimate(pattern) == null;
-    Data.setPatternEstimate(pattern, est.oneRM, { ema: !first });
-    renderCalibration(); renderExerciseSelect();
-    const remaining = Engine.PATTERNS.filter((p) => Data.patternEstimate(p) == null).length;
-    toast(remaining ? `Logged ~${round1(est.oneRM)} lb 1RM · ${remaining} pattern${remaining === 1 ? "" : "s"} left` : "Strength map complete 💪");
-  }
-
-  /* ---------- settings + data ---------- */
-  function openSettings() {
-    const s = Data.settings();
-    $("#apiKeyInput").value = s.apiKey; $("#modelSelect").value = s.model;
-    $("#settingsModal").classList.remove("hidden");
-  }
-  function saveSettings() {
-    Data.setSettings({ apiKey: $("#apiKeyInput").value.trim(), model: $("#modelSelect").value });
-    $("#settingsModal").classList.add("hidden");
-    toast("Settings saved");
-  }
-  function handleData(action) {
-    if (action === "settings") openSettings();
-    else if (action === "export") exportData();
-    else if (action === "import") $("#importFile").click();
-    else if (action === "seed") seedData();
-    else if (action === "reset") { if (confirm("Erase everything? This cannot be undone.")) { Data.reset(); currentExercise = null; currentRx = null; $("#prescribePanel").classList.add("hidden"); renderAll(); toast("All data cleared"); } }
-  }
-  function exportData() {
-    const blob = new Blob([JSON.stringify(Data.exportData(), null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a"); a.href = url; a.download = `overload-backup-${new Date().toISOString().slice(0, 10)}.json`; a.click();
-    URL.revokeObjectURL(url); toast("Exported (API key excluded)");
+  function dataAction(a) {
+    if (a === "export") {
+      const copy = JSON.parse(JSON.stringify(store)); copy.settings.apiKey = "";
+      const blob = new Blob([JSON.stringify(copy, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob); const el = document.createElement("a"); el.href = url; el.download = `coach-backup-${new Date().toISOString().slice(0, 10)}.json`; el.click(); URL.revokeObjectURL(url);
+      toast("Exported (key excluded)");
+    } else if (a === "import") $("#importFile").click();
+    else if (a === "reset") { if (confirm("Erase everything?")) { store = blank(); save(); renderAll(); startOnboardingIfNeeded(); toast("Cleared"); } }
   }
   function importData(e) {
-    const file = e.target.files[0]; if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => { try { Data.importData(JSON.parse(reader.result)); renderAll(); toast("Data imported"); } catch { toast("Could not import that file"); } };
-    reader.readAsText(file); e.target.value = "";
-  }
-
-  /* ---------- sample data ---------- */
-  function seedData() {
-    if (Data.allLogs().length && !confirm("Replace current data with the sample dataset?")) return;
-    Data.reset();
-    Data.setUser({ heightCm: 178, weightLb: 180, defaultMode: "hypertrophy" });
-    const seeds = { vertical_push: 95, horizontal_push: 155, vertical_pull: 175, horizontal_pull: 135, squat: 225, hinge: 275 };
-    Engine.PATTERNS.forEach((p) => Data.setPatternEstimate(p, seeds[p], { ema: false }));
-
-    const lat = Data.getExerciseByName("Lateral Raise");
-    const daysAgo = (d) => new Date(Date.now() - d * 86400000).toISOString();
-    const set = (w, reps, rir) => ({ weight: Engine.toTotalLoad(w, "dumbbell_pair"), reps, rir });
-    [
-      { d: 18, sets: [set(15, 8, 2), set(15, 8, 1), set(15, 7, 1)] },
-      { d: 11, sets: [set(15, 12, 1), set(15, 11, 1), set(15, 10, 0)] },
-      { d: 4, sets: [set(20, 9, 2), set(20, 8, 1), set(20, 8, 1)] },
-    ].forEach((s) => {
-      const ests = s.sets.map((x) => Engine.estimate1RM(x.weight, x.reps, x.rir)).filter((e) => e.trusted).map((e) => e.oneRM);
-      Data.addLog({ exerciseId: lat.id, date: daysAgo(s.d), sets: s.sets, sessionEstimate1RM: ests.length ? Math.max(...ests) : null, trusted: ests.length > 0, prescribedTotal: s.sets[0].weight, mode: "hypertrophy" });
-    });
-    renderAll();
-    toast("Loaded sample data");
+    const f = e.target.files[0]; if (!f) return;
+    const rd = new FileReader();
+    rd.onload = () => { try { const d = JSON.parse(rd.result); const k = store.settings.apiKey; store = Object.assign(blank(), d); store.settings.apiKey = k; store.onboarded = true; save(); renderAll(); toast("Imported"); } catch { toast("Bad file"); } };
+    rd.readAsText(f); e.target.value = "";
   }
 
   /* ---------- boot ---------- */
-  bindEvents();
+  bind();
   renderAll();
-  if (!Data.settings().apiKey) {
-    setTimeout(() => toast("Tip: add your API key in ⋯ → AI settings to photo-identify machines"), 700);
-  }
+  startOnboardingIfNeeded();
 })();

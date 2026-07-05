@@ -2,169 +2,142 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="theme-color" content="#0f172a" />
-  <title>Overload — Adaptive Progressive-Overload Trainer</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#0b1020" />
+  <title>Coach — AI Strength Trainer</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand">
-      <span class="logo">▲</span>
-      <h1>Overload</h1>
-    </div>
-    <nav class="tabs" id="tabs">
-      <button class="tab active" data-view="calibrate">Calibrate</button>
-      <button class="tab" data-view="train">Train</button>
-      <button class="tab" data-view="progress">Progress</button>
-    </nav>
-    <div class="topbar-actions">
-      <button id="dataMenuBtn" class="icon-btn" title="Options" aria-label="Options">⋯</button>
-      <div id="dataMenu" class="menu hidden">
-        <button data-action="settings">AI settings</button>
-        <button data-action="export">Export data</button>
-        <button data-action="import">Import data</button>
-        <button data-action="seed">Load sample data</button>
-        <button data-action="reset" class="danger">Reset all data</button>
-      </div>
-    </div>
-  </header>
-
   <main id="app">
-    <!-- ===================== CALIBRATE ===================== -->
-    <section id="view-calibrate" class="view active">
-      <div class="panel">
-        <div class="panel-head"><h2>Your profile</h2><span class="muted" id="profileStatus"></span></div>
-        <p class="lead">
-          Height &amp; weight are weak predictors — used only for sanity bounds, not to pick your loads.
-          Your real strength comes from calibration below.
-        </p>
-        <form id="profileForm" class="row">
-          <label class="field"><span>Height</span>
-            <span class="ht"><input type="number" id="profFt" min="0" step="1" placeholder="5" /><i>ft</i>
-            <input type="number" id="profIn" min="0" max="11" step="1" placeholder="10" /><i>in</i></span>
-          </label>
-          <label class="field"><span>Bodyweight (lb)</span><input type="number" id="profWeight" step="1" min="0" placeholder="180" /></label>
-          <label class="field"><span>Goal</span>
-            <select id="profMode">
-              <option value="strength">Strength (4–6)</option>
-              <option value="hypertrophy" selected>Hypertrophy (8–12)</option>
-              <option value="endurance">Endurance (12–15)</option>
-            </select>
-          </label>
-          <button type="submit" class="btn primary">Save</button>
-        </form>
+    <!-- ===================== TODAY ===================== -->
+    <section id="view-today" class="view active">
+      <header class="apphead">
+        <div>
+          <div class="hello" id="hello">Ready to train?</div>
+          <div class="subhello" id="subhello">Tell me what you're doing.</div>
+        </div>
+        <button class="avatar" id="meBtn" aria-label="Profile">💪</button>
+      </header>
+
+      <div id="keyBanner" class="keybanner hidden">
+        <div><b>Connect your coach to start.</b><br>Add an Anthropic API key — it stays on this device.</div>
+        <button id="keyBannerBtn">Connect →</button>
       </div>
 
-      <div class="panel">
-        <div class="panel-head"><h2>Calibration</h2><span class="muted" id="calibCount"></span></div>
-        <p class="lead">
-          Test one lift per movement pattern — a top set of <b>5–8 reps</b> at a known
-          reps-in-reserve. Each gives a trusted 1-rep-max estimate for that pattern. Once all six
-          are in, <em>every</em> exercise (even one you photograph) is prescribable. Retest anytime.
-        </p>
-        <div id="calibProgress" class="calib-progress"></div>
-        <div id="calibList" class="calib-list"></div>
-        <div id="calibDone" class="calib-done hidden"></div>
+      <div class="segmented" id="modeSeg">
+        <button class="seg active" data-mode="single">One exercise</button>
+        <button class="seg" data-mode="plan">Plan my session</button>
       </div>
+
+      <!-- single-exercise entry -->
+      <div id="singleEntry" class="entry">
+        <div class="bigfield">
+          <input type="text" id="exInput" placeholder="e.g. bench press, leg press, that ab machine…" autocomplete="off" />
+          <button id="camBtn" class="iconbtn" title="Photo" aria-label="Photo">📷</button>
+        </div>
+        <div id="photoChip" class="photo-chip hidden"></div>
+        <div id="recentChips" class="chips recent"></div>
+        <button id="coachBtn" class="cta">Program my sets →</button>
+      </div>
+
+      <!-- plan entry -->
+      <div id="planEntry" class="entry hidden">
+        <div class="chips" id="focusChips">
+          <button class="chip" data-focus="Push">Push</button>
+          <button class="chip" data-focus="Pull">Pull</button>
+          <button class="chip" data-focus="Legs">Legs</button>
+          <button class="chip" data-focus="Upper body">Upper</button>
+          <button class="chip" data-focus="Lower body">Lower</button>
+          <button class="chip" data-focus="Full body">Full body</button>
+          <button class="chip" data-focus="Chest">Chest</button>
+          <button class="chip" data-focus="Back">Back</button>
+          <button class="chip" data-focus="Shoulders">Shoulders</button>
+          <button class="chip" data-focus="Arms">Arms</button>
+        </div>
+        <button id="planBtn" class="cta" disabled>Build my workout →</button>
+      </div>
+
+      <div id="status" class="status hidden"></div>
+      <div id="result" class="result"></div>
     </section>
 
-    <!-- ===================== TRAIN ===================== -->
-    <section id="view-train" class="view">
-      <div class="panel">
-        <div class="panel-head"><h2>Pick an exercise</h2></div>
+    <!-- ===================== HISTORY ===================== -->
+    <section id="view-history" class="view">
+      <header class="apphead"><div><div class="hello">History</div><div class="subhello">Your work &amp; strength trend.</div></div></header>
+      <div class="panel" id="trendPanel">
+        <div class="panel-head"><h2>Strength trend</h2><select id="trendExercise" class="mini"></select></div>
+        <div class="chart-tabs">
+          <button class="chip2 active" data-metric="e1rm">Est. 1RM</button>
+          <button class="chip2" data-metric="volume">Volume</button>
+        </div>
+        <div id="chart"></div>
+      </div>
+      <div id="historyList" class="sessions"></div>
+    </section>
 
+    <!-- ===================== ME ===================== -->
+    <section id="view-me" class="view">
+      <header class="apphead"><div><div class="hello">You</div><div class="subhello">Profile &amp; settings.</div></div></header>
+
+      <div class="panel">
+        <div class="panel-head"><h2>Profile</h2></div>
+        <div class="field"><span>Sex</span>
+          <div class="chips small" id="meSex"><button class="chip" data-v="Male">Male</button><button class="chip" data-v="Female">Female</button></div>
+        </div>
         <div class="row">
-          <label class="field grow">
-            <span>From your library</span>
-            <select id="exSelect"></select>
-          </label>
-          <label class="field">
-            <span>Goal</span>
-            <select id="trainMode">
-              <option value="strength">Strength</option>
-              <option value="hypertrophy">Hypertrophy</option>
-              <option value="endurance">Endurance</option>
-            </select>
-          </label>
+          <label class="field"><span>Bodyweight (lb)</span><input type="number" id="meWeight" step="1" min="0" /></label>
+          <label class="field"><span>Height</span><span class="ht"><input type="number" id="meFt" min="0" /><i>ft</i><input type="number" id="meIn" min="0" max="11" /><i>in</i></span></label>
         </div>
-
-        <div class="identify-box">
-          <div class="muted small">Not in the list? Add any exercise or machine — type it or snap a photo:</div>
-          <div class="row">
-            <label class="field grow"><span>Name or hint</span><input type="text" id="exType" placeholder="e.g. Hammer Strength iso row" /></label>
-            <button id="photoBtn" class="btn ghost" type="button">📷 Photo</button>
-            <button id="identifyBtn" class="btn primary" type="button">Identify</button>
-          </div>
-          <p class="hint" id="identifyStatus"></p>
-          <div id="identifyResult" class="identify-result hidden"></div>
+        <div class="field"><span>Experience</span>
+          <div class="chips small" id="meExp"><button class="chip" data-v="Beginner">New</button><button class="chip" data-v="Intermediate">Some</button><button class="chip" data-v="Advanced">Experienced</button></div>
         </div>
-      </div>
-
-      <div class="panel hidden" id="prescribePanel">
-        <div class="panel-head"><h2 id="rxExercise">Today's set</h2><span class="muted" id="rxMeta"></span></div>
-        <div id="prescribeCard"></div>
-        <ul id="logSets" class="log-sets"></ul>
-        <div class="panel-actions" id="logActions">
-          <button id="addSetBtn" class="btn ghost" type="button">+ set</button>
-          <button id="saveSessionBtn" class="btn success" type="button">Save session</button>
+        <div class="field"><span>Goal</span>
+          <div class="chips small" id="meGoal"><button class="chip" data-v="Build muscle">Build muscle</button><button class="chip" data-v="Get stronger">Get stronger</button><button class="chip" data-v="Endurance">Endurance</button></div>
         </div>
+        <label class="field"><span>Lifts you know (optional)</span><input type="text" id="meKnown" placeholder="e.g. bench 135x8, squat 225x5" /></label>
+        <button id="saveMe" class="cta small">Save</button>
       </div>
 
       <div class="panel">
-        <div class="panel-head"><h2>Recent sessions</h2></div>
-        <div id="recentSessions" class="sessions"></div>
+        <div class="panel-head"><h2>Coach (AI)</h2></div>
+        <label class="field"><span>Anthropic API key</span><input type="password" id="meKey" placeholder="sk-ant-..." autocomplete="off" /></label>
+        <label class="field"><span>Model</span>
+          <select id="meModel"><option value="claude-opus-4-8">Opus 4.8 — smartest</option><option value="claude-sonnet-4-6">Sonnet 4.6 — faster</option></select>
+        </label>
+        <p class="fineprint">Stored only in this browser, sent directly to Anthropic. Needed for every session.</p>
+        <button id="saveKey" class="cta small">Save</button>
       </div>
-    </section>
 
-    <!-- ===================== PROGRESS ===================== -->
-    <section id="view-progress" class="view">
       <div class="panel">
-        <div class="panel-head">
-          <h2>Progress</h2>
-          <label class="field"><span>Exercise</span><select id="progressExercise"></select></label>
+        <div class="panel-head"><h2>Data</h2></div>
+        <div class="row">
+          <button class="ghost" data-data="export">Export</button>
+          <button class="ghost" data-data="import">Import</button>
+          <button class="ghost danger" data-data="reset">Reset all</button>
         </div>
-        <div class="stats" id="progressStats"></div>
-        <div class="chart-wrap">
-          <div class="chart-tabs">
-            <button class="chip active" data-metric="e1rm">Est. 1RM</button>
-            <button class="chip" data-metric="volume">Volume</button>
-          </div>
-          <div id="chart"></div>
-        </div>
-        <div id="progressHistory" class="sessions"></div>
       </div>
     </section>
   </main>
 
-  <!-- ===================== SETTINGS MODAL ===================== -->
-  <div id="settingsModal" class="modal hidden">
-    <div class="modal-card">
-      <div class="panel-head"><h2>AI settings</h2><button id="closeSettings" class="icon-btn" aria-label="Close">✕</button></div>
-      <p class="lead">
-        AI is used <b>only</b> to identify exercises &amp; machines (from a name or photo). All weights and
-        reps are computed by a deterministic engine — never the AI. Paste an
-        <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">Anthropic API key</a>;
-        it's stored only in this browser and sent directly to Anthropic.
-      </p>
-      <label class="field grow"><span>Anthropic API key</span><input type="password" id="apiKeyInput" placeholder="sk-ant-..." autocomplete="off" /></label>
-      <label class="field"><span>Model</span>
-        <select id="modelSelect">
-          <option value="claude-opus-4-8">Claude Opus 4.8 (best vision)</option>
-          <option value="claude-sonnet-4-6">Claude Sonnet 4.6 (faster)</option>
-        </select>
-      </label>
-      <div class="panel-actions"><button id="saveSettings" class="btn primary">Save</button></div>
+  <!-- ===================== BOTTOM NAV ===================== -->
+  <nav class="bottomnav" id="nav">
+    <button class="navbtn active" data-view="today"><span>▲</span>Today</button>
+    <button class="navbtn" data-view="history"><span>◷</span>History</button>
+    <button class="navbtn" data-view="me"><span>◉</span>Me</button>
+  </nav>
+
+  <!-- ===================== ONBOARDING ===================== -->
+  <div id="onboard" class="onboard hidden">
+    <div class="ob-card">
+      <div id="obBody"></div>
     </div>
   </div>
 
-  <input type="file" id="importFile" accept="application/json" class="hidden" />
   <input type="file" id="photoInput" accept="image/*" capture="environment" class="hidden" />
+  <input type="file" id="importFile" accept="application/json" class="hidden" />
   <div id="toast" class="toast hidden"></div>
 
-  <script src="engine.js"></script>
-  <script src="data.js"></script>
-  <script src="recognize.js"></script>
+  <script src="ai.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
