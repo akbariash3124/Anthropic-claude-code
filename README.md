@@ -1,76 +1,53 @@
-# Overload — Adaptive Progressive-Overload Trainer
+# Coach — AI Strength Trainer
 
-A strength app with a **deterministic, auditable engine** at its core. You
-calibrate once (test one lift per movement pattern to failure), and from then on
-it prescribes the exact weight and rep target for *any* exercise — and gets
-harder or backs off every session based on the reps and reps-in-reserve you
-actually log.
+An AI coach that tells you exactly what to lift — **right now, from your first
+set.** No calibration week, no "do three workouts so the app can learn you." You
+tell it your body and goal once, and it prescribes real, dialed-in weights
+immediately, then adapts every session from how your sets actually felt.
 
-No accounts, no backend, no build step. A static page that stores everything in
-your browser's `localStorage`. Everything is in **pounds (lb)**.
+Every weight, rep, and progression decision comes from Claude. The app itself is
+just the interface, local storage, and charts. Pounds throughout. Mobile-first.
 
-## How it's built (and why)
+## Why it's different
 
-The math lives in a pure, dependency-free engine. **There is no AI anywhere in
-the prescription path** — every weight and rep target is plain, testable
-arithmetic locked to a spec.
-
-| File | Role |
-| --- | --- |
-| `engine.js` | The locked model — Epley 1RM with RIR folding, %-by-reps table, goal modes, exercise-coefficient table, EMA strength blend, double progression, deload triggers, plate rounding. Pure functions, zero dependencies. |
-| `engine.test.js` | 21 spec test vectors as assertions. Run `node engine.test.js`. |
-| `data.js` | Persistence behind a repository interface (localStorage now, swap in SQLite later). Implements the resolution rule and the trusted-only update guarantee. |
-| `recognize.js` | The **only** AI: identifies an exercise/machine from a name or photo and returns *metadata only* (pattern, load type, coefficient). It never picks a weight or rep. |
-| `app.js` | UI + the session loop (calibrate → prescribe → log → recalibrate → progress). |
-| `index.html`, `styles.css` | Interface. |
-
-### The model, briefly
-
-- **1RM** = `weight × (1 + (reps + RIR) / 30)` (Epley). An estimate only counts
-  ("trusted") when `reps + RIR ≤ 12` — high-rep sets never move your strength
-  number.
-- **Prescription** = your estimated 1RM × the %-for-bottom-of-range, rounded to
-  loadable plates. Always at the bottom of the range, so there's room to add reps
-  before adding weight (double progression).
-- **Autoregulation** — hit the top of the range on every set at RIR ≥ 1 → add
-  load next time; land inside the range → hold and chase reps; come up short or
-  grind to RIR 0 → repeat the weight. Your strength estimate is blended with an
-  EMA (α = 0.3) from each trusted session.
-- **Deload** — if a pattern stalls (no load added for 3 sessions), regresses
-  (≤ 90% of recent peak), or runs 8 weeks without one, the next session drops to
-  88% at mid-range reps and RIR 3, then resumes.
-
-### Photograph any machine
-
-Hit an obscure machine you can't name? Snap a photo (or just type a hint) and the
-AI classifies it into the engine's terms — movement pattern, load type, and a
-strength coefficient relative to the big reference lift. The engine takes it from
-there. The AI only *labels* the exercise; the loads stay deterministic.
+- **Accurate from set one.** From your profile (sex, bodyweight, height,
+  experience, goal) the coach gives a competent starting weight — the way a real
+  trainer sizes up a new client. No ramp-up period.
+- **Dial in within a single session.** Weight feels off? Do one set, tap
+  **🎯 re-dial**, and the coach instantly corrects the rest of today's weights.
+  Minutes, not workouts.
+- **It visibly adapts.** Log reps + how hard each set felt; next time the card
+  shows *"↗ Adapted from last time"* and the coach pushes harder or backs off —
+  decisively, in one step.
+- **Photograph any machine.** Snap a photo of some obscure machine (or just
+  describe it) and the coach identifies it and programs it.
+- **Plan a whole session.** Pick Push / Pull / Legs / etc. and get a full,
+  ordered workout.
 
 ## Run it
 
-Open `index.html` in a browser, or serve the folder:
+Open `index.html`, or serve the folder:
 
 ```bash
-python3 -m http.server 8000   # then visit http://localhost:8000
+python3 -m http.server 8000     # then http://localhost:8000
 ```
 
-## Setup
+## Setup (once)
 
-1. **⋯ → AI settings** → paste an
-   [Anthropic API key](https://console.anthropic.com/settings/keys) (only needed
-   for photo/name identification; stored only in this browser).
-2. **Calibrate** → fill your profile, then test the six reference lifts (a top set
-   of 5–8 reps to a stated RIR each).
-3. **Train** → pick or photograph an exercise → do the prescribed sets → log your
-   reps + reps-in-reserve → save. The next plan adapts automatically.
-4. **Progress** → estimated-1RM and volume curves, with deload markers.
+1. On first launch, a 90-second onboarding collects your profile and an
+   [Anthropic API key](https://console.anthropic.com/settings/keys). The key is
+   stored **only in your browser** and sent directly to Anthropic — it's required
+   because this is a client-side AI app. You can add/change it later under **Me**.
+2. **Today** → type or 📷 photograph an exercise → **Program my sets** → do the
+   work, log reps + reps-in-reserve → **Log session**.
+3. Come back tomorrow — it remembers and progresses you.
 
-No key handy? **⋯ → Load sample data** fills it in so you can explore (the
-photo-identify feature still needs a key).
+## Files
 
-## Verifying the engine
+| File | Role |
+| --- | --- |
+| `ai.js` | The coach — all Claude calls (prescribe, plan) via structured outputs. |
+| `app.js` | UI, local storage, charts, the session loop. |
+| `index.html`, `styles.css` | Mobile-first interface. |
 
-```bash
-node engine.test.js     # 21/21 spec vectors
-```
+No local exercise database, no strength formulas — the intelligence is the model.
