@@ -16,20 +16,26 @@
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
   /* ---------- store ---------- */
+  const CFG = (typeof window !== "undefined" && window.COACH_CONFIG) || {};
   const blank = () => ({
-    settings: { apiKey: "", model: "claude-opus-4-8" },
-    profile: { sex: "", weightLb: null, heightCm: null, experience: "Beginner", goal: "Build muscle", known: "" },
+    settings: { apiKey: CFG.apiKey || "", model: CFG.model || "claude-opus-4-8" },
+    profile: { sex: "", weightLb: null, heightCm: null, experience: "Beginner", goal: "Build muscle", goalNotes: "", known: "" },
     onboarded: false,
     sessions: [],
+    recCache: null,
   });
   let store = load();
+  if (!store.settings.apiKey && CFG.apiKey) store.settings.apiKey = CFG.apiKey; // baked key applies to returning users too
   function load() { try { return Object.assign(blank(), JSON.parse(localStorage.getItem(KEY) || "{}")); } catch { return blank(); } }
   function save() { localStorage.setItem(KEY, JSON.stringify(store)); }
 
   let mode = "single";
   let pendingPhoto = null;
-  let pendingFocus = null;
+  let addPendingPhoto = null;
+  let pendingFocus = [];
   let trendMetric = "e1rm";
+  let restInt = null;
+  let prIds = new Set();
 
   let toastT;
   function toast(m) { const el = $("#toast"); el.textContent = m; el.classList.remove("hidden"); clearTimeout(toastT); toastT = setTimeout(() => el.classList.add("hidden"), 3400); }
@@ -74,24 +80,20 @@
   function renderOnboard() {
     const b = $("#obBody");
     if (ob.step === 0) {
-      b.innerHTML = dots(0) +
-        `<h2>Let's build your coach</h2><p class="lead">Ninety seconds. I'll use this to nail your very first weights — no guesswork, no "test week."</p>` +
+      b.innerHTML = dots(0, 2) +
+        `<h2>Let's build your coach</h2><p class="lead">Sixty seconds. I'll use this to nail your very first weights — no guesswork, no "test week."</p>` +
         `<div class="field"><span>Sex</span>${chipRow("sex", [{ v: "Male", t: "Male" }, { v: "Female", t: "Female" }], ob.draft.sex)}</div>` +
         `<div class="row"><label class="field"><span>Bodyweight (lb)</span><input type="number" id="obW" value="${ob.draft.weightLb || ""}" placeholder="180" /></label>` +
         `<label class="field"><span>Height</span><span class="ht"><input type="number" id="obFt" value="${cmToFtIn(ob.draft.heightCm).ft}" placeholder="5" /><i>ft</i><input type="number" id="obIn" value="${cmToFtIn(ob.draft.heightCm).in}" placeholder="10" /><i>in</i></span></label></div>` +
         `<div class="field"><span>Experience</span>${chipRow("experience", [{ v: "Beginner", t: "New" }, { v: "Intermediate", t: "Some" }, { v: "Advanced", t: "Experienced" }], ob.draft.experience)}</div>` +
         `<div class="field"><span>Main goal</span>${chipRow("goal", [{ v: "Build muscle", t: "Build muscle" }, { v: "Get stronger", t: "Get stronger" }, { v: "Endurance", t: "Endurance" }], ob.draft.goal)}</div>` +
         `<div class="ob-actions"><button class="cta" id="obNext">Continue →</button></div>`;
-    } else if (ob.step === 1) {
-      b.innerHTML = dots(1) +
-        `<h2>Know any of your lifts?</h2><p class="lead">Totally optional — but it sharpens your first session. Just rough numbers.</p>` +
-        `<label class="field"><span>Lifts you know</span><input type="text" id="obKnown" value="${esc(ob.draft.known || "")}" placeholder="bench 135x8, squat 225x5, curl 30s" /></label>` +
-        `<div class="ob-actions"><button class="ghost" id="obSkip">Skip</button><button class="cta" id="obNext">Continue →</button></div>`;
     } else {
-      b.innerHTML = dots(2) +
-        `<h2>Connect your coach</h2><p class="lead">The coach runs on Claude. Paste an <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">Anthropic API key</a> — it's stored only on this device and sent straight to Anthropic. You can add it later in <b>Me</b>.</p>` +
-        `<label class="field"><span>API key</span><input type="password" id="obKey" value="${esc(store.settings.apiKey)}" placeholder="sk-ant-..." /></label>` +
-        `<div class="ob-actions"><button class="ghost" id="obSkip">Later</button><button class="cta" id="obDone">Start training →</button></div>`;
+      b.innerHTML = dots(1, 2) +
+        `<h2>What are you training for?</h2><p class="lead">In your own words — I'll factor it into every single session. Body parts you care about, sports, injuries to work around, anything.</p>` +
+        `<label class="field"><span>Your goals</span><textarea id="obNotes" rows="3" placeholder="build bigger arms and a wider back, stay lean, easy on my right shoulder…">${esc(ob.draft.goalNotes || "")}</textarea></label>` +
+        `<label class="field"><span>Lifts you know (optional)</span><input type="text" id="obKnown" value="${esc(ob.draft.known || "")}" placeholder="bench 135x8, squat 225x5, curl 30s" /></label>` +
+        `<div class="ob-actions"><button class="ghost" id="obSkip">Skip</button><button class="cta" id="obDone">Start training →</button></div>`;
     }
     wireOnboard();
   }
@@ -103,17 +105,14 @@
     }));
     const next = $("#obNext");
     if (next) next.addEventListener("click", () => {
-      if (ob.step === 0) {
-        ob.draft.weightLb = parseFloat($("#obW").value) || null;
-        ob.draft.heightCm = ftInToCm($("#obFt").value, $("#obIn").value);
-        if (!ob.draft.sex) ob.draft.sex = "";
-      } else if (ob.step === 1) { ob.draft.known = $("#obKnown").value.trim(); }
-      ob.step++; renderOnboard();
+      ob.draft.weightLb = parseFloat($("#obW").value) || null;
+      ob.draft.heightCm = ftInToCm($("#obFt").value, $("#obIn").value);
+      if (!ob.draft.sex) ob.draft.sex = "";
+      ob.step = 1; renderOnboard();
     });
-    const skip = $("#obSkip");
-    if (skip) skip.addEventListener("click", () => { if (ob.step === 1) ob.draft.known = ($("#obKnown") || {}).value || ob.draft.known; ob.step++; if (ob.step > 2) finishOnboard(); else renderOnboard(); });
-    const done = $("#obDone");
-    if (done) done.addEventListener("click", () => { store.settings.apiKey = ($("#obKey").value || "").trim(); finishOnboard(); });
+    const captureStep1 = () => { if ($("#obNotes")) ob.draft.goalNotes = $("#obNotes").value.trim(); if ($("#obKnown")) ob.draft.known = $("#obKnown").value.trim(); };
+    const skip = $("#obSkip"); if (skip) skip.addEventListener("click", () => { captureStep1(); finishOnboard(); });
+    const done = $("#obDone"); if (done) done.addEventListener("click", () => { captureStep1(); finishOnboard(); });
   }
   function finishOnboard() {
     Object.assign(store.profile, ob.draft);
@@ -148,25 +147,44 @@
       });
       stop(); setStatus(null); clearPhoto();
       $("#result").appendChild(exerciseCard(rx, { standalone: true, src, adapted }));
+      showAddEx(true);
     } catch (e) { stop(); handleErr(e); }
+  }
+
+  async function coachAndAppend() {
+    if (!ensureReady()) return;
+    const name = $("#addExInput").value.trim();
+    if (!name && !addPendingPhoto) { toast("Type an exercise or add a photo"); return; }
+    const src = { name, image: addPendingPhoto };
+    const btn = $("#addExGo"); const pv = btn.textContent; btn.textContent = "Adding…"; btn.disabled = true;
+    try {
+      const rx = await AI.coach({ profile: store.profile, exerciseName: name, imageDataUrl: addPendingPhoto, history: buildHistory(name), apiKey: store.settings.apiKey, model: store.settings.model });
+      $("#result").appendChild(exerciseCard(rx, { standalone: true, src, adapted: buildHistory(name).thisExercise.length > 0 }));
+      $("#addExInput").value = ""; clearAddPhoto();
+      $("#result").lastChild.scrollIntoView({ behavior: "smooth", block: "center" });
+      toast("Added to your workout 💪");
+    } catch (e) { handleErr(e); } finally { btn.textContent = pv; btn.disabled = false; }
   }
 
   async function runPlan() {
     if (!ensureReady()) return;
-    if (!pendingFocus) { toast("Pick a focus"); return; }
+    if (!pendingFocus.length) { toast("Pick one or more focuses"); return; }
+    const focusLabel = pendingFocus.join(" + ");
     $("#result").innerHTML = "";
-    const stop = loadingCycle([`Planning your ${pendingFocus.toLowerCase()} day…`, "Picking your lifts…", "Setting your weights…"]);
+    const stop = loadingCycle([`Planning your ${focusLabel.toLowerCase()} day…`, "Picking your lifts…", "Setting your weights…"]);
     try {
-      const recent = store.sessions.slice(-8).map((s) => ({ name: s.name, date: s.date.slice(0, 10) }));
-      const plan = await AI.plan({ profile: store.profile, focus: pendingFocus, history: { recentSessions: recent }, apiKey: store.settings.apiKey, model: store.settings.model });
+      const recent = store.sessions.slice(-8).map((s) => ({ name: s.name, muscleGroup: s.muscleGroup, date: s.date.slice(0, 10) }));
+      const plan = await AI.plan({ profile: store.profile, focus: focusLabel, history: { recentSessions: recent }, apiKey: store.settings.apiKey, model: store.settings.model });
       stop(); setStatus(null);
       const head = document.createElement("div");
       head.className = "notice";
       head.innerHTML = `<b>${esc(plan.title)}</b><br>${esc(plan.note)}`;
       $("#result").appendChild(head);
-      plan.exercises.forEach((ex) => $("#result").appendChild(exerciseCard(ex, { standalone: false })));
+      plan.exercises.forEach((ex) => $("#result").appendChild(exerciseCard(ex, { standalone: false, src: { name: ex.resolvedName, image: null } })));
+      showAddEx(true);
     } catch (e) { stop(); handleErr(e); }
   }
+  function showAddEx(v) { $("#addExWrap").classList.toggle("hidden", !v); }
 
   function ensureReady() {
     if (!hasKey()) { switchView("me"); toast("Add your API key to start coaching"); return false; }
@@ -187,6 +205,8 @@
     el.className = "exercise-card";
     el._rx = rx;
     el._src = ctx.src || null;
+    el._rest = rx.restSeconds || 120;
+    const doneCount = ctx.doneCount || 0;
 
     const oneRm = rx.estimatedOneRepMax ? `<div class="xc-1rm"><b>${round(rx.estimatedOneRepMax)}</b><small>est 1RM · lb</small></div>` : "";
     const cues = (rx.cues || []).map((c) => `<span class="cue">${esc(c)}</span>`).join("");
@@ -205,8 +225,8 @@
       (cues ? `<div class="cues">${cues}</div>` : "") +
       (warm.length ? `<div class="setgroup-label">Warm-up</div>` + warm.map((s, i) => setRow(s, i, true, rx.perHand)).join("") : "") +
       `<div class="setgroup-label">Working sets · ${wUnit(rx.perHand)}</div>` +
-      work.map((s, i) => setRow(s, i, false, rx.perHand)).join("") +
-      `<button class="redial" data-act="feeler">🎯 Too heavy or light? Do set 1 &amp; re-dial</button>` +
+      work.map((s, i) => setRow(s, i, false, rx.perHand, i < doneCount)).join("") +
+      `<button class="redial" data-act="feeler">🎯 Too heavy or light? Mark done sets, then re-dial the rest</button>` +
       feelerHint +
       `<div class="card-actions">` +
       `<button class="cta small" data-act="save">Log session</button>` +
@@ -216,7 +236,7 @@
 
     el.addEventListener("click", (e) => {
       const done = e.target.closest(".donebtn");
-      if (done) { done.closest(".setrow").classList.toggle("done"); return; }
+      if (done) { const row = done.closest(".setrow"); row.classList.toggle("done"); if (row.classList.contains("done") && row.dataset.warm === "0") startRest(el._rest); return; }
       const act = e.target.closest("[data-act]");
       if (!act) return;
       if (act.dataset.act === "save") saveCard(el);
@@ -238,8 +258,8 @@
     } catch (e) { btn.textContent = "↻"; btn.disabled = false; handleErr(e); }
   }
 
-  function setRow(s, i, warm, perHand) {
-    return `<div class="setrow ${warm ? "warm" : ""}" data-warm="${warm ? 1 : 0}">` +
+  function setRow(s, i, warm, perHand, done) {
+    return `<div class="setrow ${warm ? "warm" : ""} ${done ? "done" : ""}" data-warm="${warm ? 1 : 0}">` +
       `<span class="setnum">${warm ? "W" : i + 1}</span>` +
       `<input class="s-w" type="number" step="0.5" value="${s.weight}" />` +
       `<span class="x">×</span>` +
@@ -248,6 +268,20 @@
       `<button class="donebtn" title="Done">✓</button>` +
     `</div>`;
   }
+
+  /* ---------- rest timer ---------- */
+  function startRest(seconds) {
+    let left = Math.max(10, seconds || 120);
+    const el = $("#restTimer"), cnt = $("#restCount"), lbl = $("#restLabel");
+    const fmt = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+    clearInterval(restInt);
+    el.classList.remove("hidden", "done"); lbl.textContent = "Rest"; cnt.textContent = fmt(left);
+    restInt = setInterval(() => {
+      left--; cnt.textContent = fmt(Math.max(0, left));
+      if (left <= 0) { clearInterval(restInt); el.classList.add("done"); lbl.textContent = "Go!"; cnt.textContent = "💥"; setTimeout(() => el.classList.add("hidden"), 4000); }
+    }, 1000);
+  }
+  function stopRest() { clearInterval(restInt); $("#restTimer").classList.add("hidden"); }
 
   function readSets(el, workingOnly) {
     return $$(".setrow", el).filter((r) => !workingOnly || r.dataset.warm === "0").map((r) => ({
@@ -261,20 +295,42 @@
 
   async function feelerDialIn(el) {
     const rx = el._rx;
-    const first = $$(".setrow", el).find((r) => r.dataset.warm === "0");
-    if (!first) return;
-    const feeler = { weight: parseFloat($(".s-w", first).value), reps: parseInt($(".s-r", first).value, 10), rir: $(".s-rir", first) ? parseInt($(".s-rir", first).value, 10) : 1 };
-    if (!(feeler.weight >= 0) || !(feeler.reps > 0)) { toast("Log your first set, then dial in"); return; }
+    const rows = $$(".setrow", el).filter((r) => r.dataset.warm === "0");
+    const readRow = (r) => ({ weight: parseFloat($(".s-w", r).value), reps: parseInt($(".s-r", r).value, 10), rir: $(".s-rir", r) ? parseInt($(".s-rir", r).value, 10) : 1 });
+    const done = rows.filter((r) => r.classList.contains("done"));
+    const undone = rows.filter((r) => !r.classList.contains("done"));
+    if (!undone.length) { toast("All sets are done — nothing left to re-dial"); return; }
+
+    let feeler = null, completedSets = null, remainingCount = null;
+    if (done.length) {
+      completedSets = done.map(readRow).filter((s) => s.reps > 0);
+      feeler = completedSets[completedSets.length - 1];
+      remainingCount = undone.length;
+    } else {
+      const f = readRow(undone[0]);
+      if (!(f.weight >= 0) || !(f.reps > 0)) { toast("Do your first set (or mark it done), then re-dial"); return; }
+      feeler = f;
+    }
+
     const btn = $('[data-act="feeler"]', el); const prev = btn.textContent;
     btn.textContent = "Dialing in…"; btn.disabled = true;
     try {
       const nrx = await AI.coach({
         profile: store.profile, exerciseName: rx.resolvedName, history: buildHistory(rx.resolvedName),
-        feeler, apiKey: store.settings.apiKey, model: store.settings.model,
+        feeler, completedSets, remainingCount, apiKey: store.settings.apiKey, model: store.settings.model,
       });
-      const fresh = exerciseCard(nrx, { standalone: !!el._src, src: el._src, adapted: buildHistory(nrx.resolvedName).thisExercise.length > 0 });
+      let mergedWork, doneCount = 0;
+      if (completedSets) {
+        const doneData = done.map((r) => { const v = readRow(r); return { weight: v.weight, reps: v.reps, targetRIR: v.rir }; });
+        mergedWork = doneData.concat(nrx.workingSets || []);
+        doneCount = doneData.length;
+      } else {
+        mergedWork = nrx.workingSets || [];
+      }
+      const merged = Object.assign({}, nrx, { workingSets: mergedWork, restSeconds: nrx.restSeconds || rx.restSeconds });
+      const fresh = exerciseCard(merged, { standalone: !!el._src, src: el._src, adapted: buildHistory(nrx.resolvedName).thisExercise.length > 0, doneCount });
       el.replaceWith(fresh);
-      toast("Dialed in from your set 💪");
+      toast(completedSets ? "Re-dialed your remaining sets 💪" : "Dialed in from your set 💪");
     } catch (e) { btn.textContent = prev; btn.disabled = false; handleErr(e); }
   }
 
@@ -288,6 +344,7 @@
       date: new Date().toISOString(), warmup: rx.warmup || [], workingSets: rx.workingSets || [],
       logged, estimatedOneRepMax: rx.estimatedOneRepMax || null, rationale: rx.rationale || "",
     });
+    store.recCache = null; // new data → refresh today's focus
     save();
     el.querySelector(".card-actions").innerHTML = `<div class="notice" style="width:100%">✓ Logged. Next time I'll push you harder or back off based on how that felt.</div>`;
     $("[data-act='feeler']", el)?.remove();
@@ -298,10 +355,30 @@
   /* ============================================================
      HISTORY + CHART
      ============================================================ */
+  function computePR() {
+    prIds = new Set(); const best = {};
+    store.sessions.slice().sort((a, b) => new Date(a.date) - new Date(b.date)).forEach((s) => {
+      if (!s.estimatedOneRepMax) return;
+      const k = s.name.toLowerCase();
+      if (best[k] != null && s.estimatedOneRepMax > best[k]) prIds.add(s.id);
+      best[k] = best[k] != null ? Math.max(best[k], s.estimatedOneRepMax) : s.estimatedOneRepMax;
+    });
+  }
+  function weekSummary() {
+    const wk = Date.now() - 7 * 86400000;
+    const recent = store.sessions.filter((s) => new Date(s.date).getTime() >= wk);
+    if (!recent.length) return "";
+    const vol = recent.reduce((t, s) => t + s.logged.reduce((a, x) => a + x.weight * x.reps * (s.perHand ? 2 : 1), 0), 0);
+    const muscles = [...new Set(recent.map((s) => (s.muscleGroup || "").split(/[,/]/)[0].trim()).filter(Boolean))].slice(0, 4);
+    return `<div class="weeksum"><div><b>${recent.length}</b><span>session${recent.length === 1 ? "" : "s"}</span></div>` +
+      `<div><b>${(vol / 1000).toFixed(1)}k</b><span>lb moved</span></div>` +
+      `<div class="ws-muscles">${muscles.map((m) => `<span>${esc(m)}</span>`).join("")}</div></div>`;
+  }
   function renderHistory() {
+    computePR();
     const list = $("#historyList");
     const sorted = store.sessions.slice().sort((a, b) => new Date(b.date) - new Date(a.date));
-    list.innerHTML = sorted.length ? sorted.map(sessionCard).join("") : `<p class="empty">No sessions yet.</p>`;
+    list.innerHTML = (sorted.length ? weekSummary() : "") + (sorted.length ? sorted.map(sessionCard).join("") : `<p class="empty">No sessions yet.</p>`);
     // trend select
     const names = [...new Set(store.sessions.map((s) => s.name))];
     const sel = $("#trendExercise");
@@ -313,7 +390,8 @@
   function sessionCard(s) {
     const pills = s.logged.map((x) => `<span class="pill">${round(x.weight)}${s.perHand ? "/h" : ""}×${x.reps}${x.rir != null ? ` @${x.rir}` : ""}</span>`).join("");
     const vol = s.logged.reduce((t, x) => t + x.weight * x.reps * (s.perHand ? 2 : 1), 0);
-    return `<div class="session"><div class="session-head"><span class="name">${esc(s.name)}</span><span class="date">${fmtDate(s.date)}</span></div>` +
+    const pr = prIds.has(s.id) ? ` <span class="pill pr">PR</span>` : "";
+    return `<div class="session"><div class="session-head"><span class="name">${esc(s.name)}${pr}</span><span class="date">${fmtDate(s.date)}</span></div>` +
       `<div class="session-sets">${pills}</div><div class="session-meta"><span>Vol ${round(vol)} lb</span>${s.estimatedOneRepMax ? `<span>Est 1RM ${round(s.estimatedOneRepMax)} lb</span>` : ""}</div></div>`;
   }
 
@@ -355,6 +433,7 @@
     setChips("#meSex", p.sex); setChips("#meExp", p.experience); setChips("#meGoal", p.goal);
     $("#meWeight").value = p.weightLb || "";
     const h = cmToFtIn(p.heightCm); $("#meFt").value = h.ft; $("#meIn").value = h.in;
+    $("#meNotes").value = p.goalNotes || "";
     $("#meKnown").value = p.known || "";
     $("#meKey").value = store.settings.apiKey;
     $("#meModel").value = store.settings.model;
@@ -375,6 +454,54 @@
     const seen = new Set(); const recent = [];
     store.sessions.slice().reverse().forEach((s) => { const k = s.name.toLowerCase(); if (!seen.has(k)) { seen.add(k); recent.push(s.name); } });
     $("#recentChips").innerHTML = recent.slice(0, 6).map((n) => `<button class="chip" data-recent="${esc(n)}">${esc(n)}</button>`).join("");
+    renderTodayFocus(false);
+  }
+
+  /* ---------- today's focus (AI recommendation) ---------- */
+  function recentForRec() {
+    return { recentSessions: store.sessions.slice(-14).map((s) => ({ name: s.name, muscleGroup: s.muscleGroup, date: s.date.slice(0, 10) })) };
+  }
+  function statusChip(m) {
+    return `<span class="mstatus"><span class="dot ${m.status}"></span><b>${esc(m.muscle)}</b> · ${esc(m.lastTrained)}</span>`;
+  }
+  function focusHtml(d) {
+    const focus = (d.recommendedFocus || []).map((f) => `<button data-buildfocus="${esc(f)}">${esc(f)} →</button>`).join("");
+    const status = (d.muscleStatus || []).map(statusChip).join("");
+    return `<div class="fr-top"><span class="fr-kicker">Today's focus</span><button class="fr-refresh" data-frrefresh title="Refresh">↻</button></div>` +
+      `<h3>${esc(d.headline)}</h3><p>${esc(d.rationale)}</p>` +
+      (focus ? `<div class="fr-focus">${focus}</div>` : "") +
+      (status ? `<div class="fr-status">${status}</div>` : "");
+  }
+  function renderTodayFocus(force) {
+    const box = $("#focusRec");
+    if (!hasKey()) { box.classList.add("hidden"); return; }
+    if (!store.sessions.length) {
+      box.classList.remove("hidden");
+      box.innerHTML = `<span class="fr-kicker">Today's focus</span><h3>Log your first session</h3><p>Once I've seen you train, I'll analyze your recovery and tell you exactly which body parts are due — every day.</p>`;
+      return;
+    }
+    const today = new Date().toISOString().slice(0, 10);
+    if (!force && store.recCache && store.recCache.date === today) {
+      box.classList.remove("hidden"); box.innerHTML = focusHtml(store.recCache.data); wireFocus(box); return;
+    }
+    box.classList.remove("hidden");
+    box.innerHTML = `<span class="fr-kicker">Today's focus</span><p style="margin-top:8px"><span class="spinner"></span>Analyzing your recent training…</p>`;
+    AI.recommend({ profile: store.profile, history: recentForRec(), today, apiKey: store.settings.apiKey, model: store.settings.model })
+      .then((d) => { store.recCache = { date: today, data: d }; save(); box.innerHTML = focusHtml(d); wireFocus(box); })
+      .catch(() => { box.classList.add("hidden"); });
+  }
+  function wireFocus(box) {
+    $("[data-frrefresh]", box)?.addEventListener("click", () => renderTodayFocus(true));
+    $$("[data-buildfocus]", box).forEach((b) => b.addEventListener("click", () => buildFocus(b.dataset.buildfocus)));
+  }
+  function buildFocus(name) {
+    mode = "plan"; pendingFocus = [name];
+    $$(".seg").forEach((s) => s.classList.toggle("active", s.dataset.mode === "plan"));
+    $("#singleEntry").classList.add("hidden"); $("#planEntry").classList.remove("hidden");
+    $$("#focusChips .chip").forEach((c) => c.classList.toggle("active", c.dataset.focus === name));
+    $("#planBtn").disabled = false;
+    runPlan();
+    window.scrollTo({ top: 0, behavior: "smooth" });
   }
   function switchView(v) {
     $$(".navbtn").forEach((b) => b.classList.toggle("active", b.dataset.view === v));
@@ -385,24 +512,22 @@
   }
 
   /* ---------- photo ---------- */
-  function handlePhoto(file) {
-    const img = new Image();
-    const rd = new FileReader();
-    rd.onload = () => { img.onload = () => downscale(img); img.src = rd.result; };
+  function readPhoto(file, cb) {
+    const img = new Image(); const rd = new FileReader();
+    rd.onload = () => { img.onload = () => cb(downscaleImg(img)); img.src = rd.result; };
     rd.readAsDataURL(file);
   }
-  function downscale(img) {
-    const max = 1024;
-    let { width: w, height: h } = img;
+  function downscaleImg(img) {
+    const max = 1024; let { width: w, height: h } = img;
     if (w > max || h > max) { const r = Math.min(max / w, max / h); w = Math.round(w * r); h = Math.round(h * r); }
     const c = document.createElement("canvas"); c.width = w; c.height = h;
     c.getContext("2d").drawImage(img, 0, 0, w, h);
-    pendingPhoto = c.toDataURL("image/jpeg", 0.82);
-    $("#photoChip").innerHTML = `📷 photo attached <button id="rmPhoto">✕</button>`;
-    $("#photoChip").classList.remove("hidden");
-    $("#rmPhoto").addEventListener("click", clearPhoto);
+    return c.toDataURL("image/jpeg", 0.82);
   }
+  function handlePhoto(file) { readPhoto(file, (data) => { pendingPhoto = data; $("#photoChip").innerHTML = `📷 photo attached <button id="rmPhoto">✕</button>`; $("#photoChip").classList.remove("hidden"); $("#rmPhoto").addEventListener("click", clearPhoto); }); }
   function clearPhoto() { pendingPhoto = null; $("#photoChip").classList.add("hidden"); $("#photoChip").innerHTML = ""; }
+  function handleAddPhoto(file) { readPhoto(file, (data) => { addPendingPhoto = data; $("#addExPhoto").innerHTML = `📷 photo attached <button id="rmAddPhoto">✕</button>`; $("#addExPhoto").classList.remove("hidden"); $("#rmAddPhoto").addEventListener("click", clearAddPhoto); }); }
+  function clearAddPhoto() { addPendingPhoto = null; $("#addExPhoto").classList.add("hidden"); $("#addExPhoto").innerHTML = ""; }
 
   /* ============================================================
      EVENTS
@@ -417,7 +542,7 @@
       $$(".seg").forEach((s) => s.classList.toggle("active", s === b));
       $("#singleEntry").classList.toggle("hidden", mode !== "single");
       $("#planEntry").classList.toggle("hidden", mode !== "plan");
-      $("#result").innerHTML = ""; setStatus(null);
+      $("#result").innerHTML = ""; setStatus(null); showAddEx(false);
     });
 
     $("#coachBtn").addEventListener("click", runCoach);
@@ -429,11 +554,16 @@
 
     $("#focusChips").addEventListener("click", (e) => {
       const c = e.target.closest(".chip"); if (!c) return;
-      pendingFocus = c.dataset.focus;
-      $$("#focusChips .chip").forEach((x) => x.classList.toggle("active", x === c));
-      $("#planBtn").disabled = false;
+      c.classList.toggle("active");
+      pendingFocus = $$("#focusChips .chip.active").map((x) => x.dataset.focus);
+      $("#planBtn").disabled = pendingFocus.length === 0;
     });
     $("#planBtn").addEventListener("click", runPlan);
+    $("#addExGo").addEventListener("click", coachAndAppend);
+    $("#addExInput").addEventListener("keydown", (e) => { if (e.key === "Enter") coachAndAppend(); });
+    $("#addExCam").addEventListener("click", () => $("#addExPhotoInput").click());
+    $("#addExPhotoInput").addEventListener("change", (e) => { if (e.target.files[0]) handleAddPhoto(e.target.files[0]); e.target.value = ""; });
+    $("#restSkip").addEventListener("click", stopRest);
 
     $("#trendExercise").addEventListener("change", renderChart);
     $$(".chart-tabs .chip2").forEach((c) => c.addEventListener("click", () => { $$(".chart-tabs .chip2").forEach((x) => x.classList.remove("active")); c.classList.add("active"); trendMetric = c.dataset.metric; renderChart(); }));
@@ -443,7 +573,8 @@
       const wrap = c.parentElement; $$(".chip", wrap).forEach((x) => x.classList.toggle("active", x === c));
     }));
     $("#saveMe").addEventListener("click", () => {
-      store.profile = { sex: chipVal("#meSex"), weightLb: parseFloat($("#meWeight").value) || null, heightCm: ftInToCm($("#meFt").value, $("#meIn").value), experience: chipVal("#meExp") || "Beginner", goal: chipVal("#meGoal") || "Build muscle", known: $("#meKnown").value.trim() };
+      store.profile = { sex: chipVal("#meSex"), weightLb: parseFloat($("#meWeight").value) || null, heightCm: ftInToCm($("#meFt").value, $("#meIn").value), experience: chipVal("#meExp") || "Beginner", goal: chipVal("#meGoal") || "Build muscle", goalNotes: $("#meNotes").value.trim(), known: $("#meKnown").value.trim() };
+      store.recCache = null; // profile changed → refresh today's focus
       save(); renderToday(); toast("Profile saved");
     });
     $("#saveKey").addEventListener("click", () => { store.settings = { apiKey: $("#meKey").value.trim(), model: $("#meModel").value }; save(); renderToday(); toast("Saved"); });
