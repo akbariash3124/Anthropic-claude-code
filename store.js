@@ -168,7 +168,7 @@ const Store = (function () {
   function addWeeklyReview(data) {
     const r = { id: uid(), date: new Date().toISOString(), data };
     state.weeklyReviews.push(r);
-    if (data.weeklyRollup) { state.rollups.weekly.push({ weekOf: today(), text: data.weeklyRollup }); state.rollups.weekly = state.rollups.weekly.slice(-12); }
+    if (data.weeklyRollup) { state.rollups.weekly.push({ weekOf: today(), text: data.weeklyRollup }); state.rollups.weekly = state.rollups.weekly.slice(-26); }
     if (data.athleteModel) setAthleteModel(data.athleteModel);
     if (data.muscleTargets) {
       state.block.targets = {};
@@ -180,8 +180,8 @@ const Store = (function () {
       else if (bc.action === "new_block") {
         if (state.rollups.weekly.length) {
           state.rollups.blocks.push({ ended: today(), text: (data.blockRollup || data.weeklyRollup || "").slice(0, 2000) });
-          state.rollups.blocks = state.rollups.blocks.slice(-8);
-          state.rollups.career = state.rollups.blocks.map((b) => `[Block ended ${b.ended}] ${b.text}`).join("\n\n").slice(-6000);
+          state.rollups.blocks = state.rollups.blocks.slice(-20);
+          state.rollups.career = state.rollups.blocks.map((b) => `[Block ended ${b.ended}] ${b.text}`).join("\n\n").slice(-14000);
         }
         state.block = { phase: "accumulation", weekNum: 1, startedAt: today(), targets: state.block.targets, specialization: (data.specialization && data.specialization.muscles) || [], experiment: (data.experiment && data.experiment.description) || "" };
       } else { state.block.phase = "accumulation"; state.block.weekNum = bc.weekNum || (state.block.weekNum + 1); }

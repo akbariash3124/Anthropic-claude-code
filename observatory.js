@@ -19,13 +19,28 @@ const Obs = (function () {
   const r1 = (n) => Math.round(n * 10) / 10;
   const r2 = (n) => Math.round(n * 100) / 100;
 
-  // e1RM as a trend metric (Epley, reps capped @12; skip junk sets)
+  const TZ = "America/Vancouver";
+  function nowInfo() {
+    const d = new Date();
+    const fmt = new Intl.DateTimeFormat("en-CA", { timeZone: TZ, weekday: "long", year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
+    return { timezone: TZ, local: fmt.format(d), iso: d.toISOString() };
+  }
+  function dayOfWeek(iso) {
+    return new Intl.DateTimeFormat("en-CA", { timeZone: TZ, weekday: "short" }).format(new Date(iso));
+  }
+  function localTime(iso) {
+    return new Intl.DateTimeFormat("en-CA", { timeZone: TZ, hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(iso));
+  }
+
+  // e1RM as a trend metric (Epley, reps capped @12; skip junk sets).
+  // Sessions on non-lb machines (numbered stacks) produce no lb strength value.
   function setE1rm(s) {
     if (!s || !(s.weight > 0) || !(s.reps > 0)) return null;
     const reps = Math.min(s.reps + (s.rir != null ? Math.min(s.rir, 4) : 0), 12);
     return s.weight * (1 + reps / 30);
   }
   function sessionE1rm(sess) {
+    if (sess.unitLabel && sess.unitLabel !== "lb") return null;
     const vals = (sess.logged || []).map(setE1rm).filter(Boolean);
     return vals.length ? Math.max(...vals) : (sess.estimatedOneRepMax || null);
   }
@@ -190,11 +205,34 @@ const Obs = (function () {
     const avg = (k) => (dayTotals.length ? Math.round(dayTotals.reduce((a, b) => a + b[k], 0) / dayTotals.length) : null);
     return {
       targets: (state.nutrition && state.nutrition.targets) || null,
-      today: { calories: Math.round(t.cal), protein: Math.round(t.p), carbs: Math.round(t.c), fat: Math.round(t.f), mealsLogged: todayMeals.length },
+      today: { calories: Math.round(t.cal), protein: Math.round(t.p), carbs: Math.round(t.c), fat: Math.round(t.f), mealsLogged: todayMeals.length, meals: todayMeals.map((m) => ({ name: m.name, time: localTime(m.date), protein: m.protein })) },
       last7d: { daysLogged: days.length, avgCalories: avg("cal"), avgProtein: avg("p") },
       recentMealNames: meals.slice(-14).map((m) => m.name),
       savedRecipes: (state.recipes || []).slice(0, 10).map((r) => r.name),
     };
+  }
+
+  /* ---------- lifetime memory index (never forgets) ---------- */
+  function lifetime(state) {
+    const s = state.sessions, first = s.length ? s.reduce((a, b) => (a.date < b.date ? a : b)).date : null;
+    return {
+      trainingSince: first ? first.slice(0, 10) : null,
+      weeksOfHistory: first ? Math.round(ageDays(first) / 7) : 0,
+      totalLiftSessions: s.length,
+      totalCardioSessions: (state.cardio || []).length,
+      totalMealsLogged: (state.meals || []).length,
+      weeklyReviewsRun: (state.weeklyReviews || []).length,
+    };
+  }
+  // Compact index of EVERY lift ever trained — history never scrolls out of view.
+  function allLiftIndex(state) {
+    const byName = {};
+    state.sessions.forEach((s) => { (byName[s.name] = byName[s.name] || []).push(s); });
+    return Object.keys(byName).map((name) => {
+      const list = byName[name].sort((a, b) => (a.date < b.date ? -1 : 1));
+      const best = Math.max(0, ...list.map((x) => sessionE1rm(x) || 0));
+      return { name, n: list.length, first: list[0].date.slice(0, 10), last: list[list.length - 1].date.slice(0, 10), bestE1rm: best ? r1(best) : null };
+    }).sort((a, b) => (a.last < b.last ? 1 : -1));
   }
 
   /* ---------- THE DISTILLATION — context bundle for every AI call ---------- */
@@ -202,6 +240,7 @@ const Obs = (function () {
     const ci = state.checkIns.find((x) => x.date === new Date().toISOString().slice(0, 10));
     return {
       unit: "lb",
+      now: nowInfo(),
       profile: state.profile,
       dietPhase: state.dietPhase,
       block: state.block,
@@ -216,15 +255,18 @@ const Obs = (function () {
       cardio: cardioSummary(state),
       adherence: adherence(state),
       recentSessions: state.sessions.slice(-10).map((s) => ({
-        date: s.date.slice(0, 10), name: s.name,
+        date: s.date.slice(0, 10), dayOfWeek: dayOfWeek(s.date), daysAgo: Math.round(ageDays(s.date)), name: s.name,
         muscles: (s.muscles || []).map((m) => m.name),
         sets: (s.logged || []).map((x) => `${x.weight}x${x.reps}@${x.rir != null ? x.rir : "?"}`).join(", "),
+        unit: s.unitLabel || "lb",
         e1rm: sessionE1rm(s) ? r1(sessionE1rm(s)) : null,
       })),
       athleteModel: state.athleteModel.text || "(no notes yet — first weeks)",
       pendingCoachNotes: state.athleteModel.pendingNotes.map((n) => `[${n.date}] ${n.note}`),
       memory: {
-        recentWeeklyRollups: state.rollups.weekly.slice(-4),
+        lifetime: lifetime(state),
+        allLiftsEverTrained: allLiftIndex(state),
+        recentWeeklyRollups: state.rollups.weekly.slice(-8),
         careerSummary: state.rollups.career || "",
       },
       daysSinceLastWeeklyReview: state.weeklyReviews.length ? Math.round((now() - new Date(state.weeklyReviews[state.weeklyReviews.length - 1].date).getTime()) / DAY) : null,
@@ -236,7 +278,7 @@ const Obs = (function () {
     volumeThisWeek, volumeLastWeek, muscleFreshness,
     liftSeries, liftSummaries, slopePerWeek, predictionMetrics,
     weightTrend, cardioSummary, adherence, exerciseROI,
-    nutritionSummary, distill,
+    nutritionSummary, nowInfo, lifetime, allLiftIndex, distill,
   };
 })();
 
