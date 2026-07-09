@@ -235,6 +235,63 @@ const Obs = (function () {
     }).sort((a, b) => (a.last < b.last ? 1 : -1));
   }
 
+  /* ---------- cycle pharmacokinetics (compounds + pin log) ----------
+     First-order elimination: each injection decays with the compound's
+     half-life; current level is the superposition of every pin. Steady
+     state is the ceiling that schedule converges to with perfect
+     adherence. All estimates — good enough to see accumulation,
+     missed-pin dips, and when levels have plateaued. */
+  const localDay = (d) => new Intl.DateTimeFormat("en-CA", { timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
+  const dayNum = (dateStr) => Math.floor(new Date(dateStr + "T12:00:00Z").getTime() / DAY);
+
+  function compoundLevel(c, pins, onDay) {
+    const dose = c.mgPerWeek * c.intervalDays / 7;
+    return pins.reduce((sum, p) => {
+      const days = onDay - dayNum(p.date);
+      return days < 0 ? sum : sum + (p.mg || dose) * Math.pow(2, -days / c.halfLifeDays);
+    }, 0);
+  }
+
+  function cycleStatus(state) {
+    const comps = (state.compounds || []).filter((c) => c.active !== false);
+    if (!comps.length) return null;
+    const todayStr = localDay(new Date());
+    const t = dayNum(todayStr);
+    return comps.map((c) => {
+      const dose = r1(c.mgPerWeek * c.intervalDays / 7);
+      const pins = (state.pins || []).filter((p) => p.compoundId === c.id).sort((a, b) => (a.date < b.date ? -1 : 1));
+      const dayOfCycle = t - dayNum(c.startDate) + 1;
+      const level = compoundLevel(c, pins, t);
+      const steadyState = dose / (1 - Math.pow(2, -c.intervalDays / c.halfLifeDays));
+      const pinnedToday = pins.some((p) => p.date === todayStr);
+      const last = pins.length ? pins[pins.length - 1].date : null;
+      const daysSinceLast = last ? t - dayNum(last) : Infinity;
+      const dueToday = !pinnedToday && daysSinceLast >= Math.floor(c.intervalDays);
+      const expected = Math.max(0, Math.floor((dayOfCycle - 1) / c.intervalDays)) + 1;
+      const missed = Math.max(0, expected - pins.length - (dueToday ? 1 : 0));
+      return {
+        id: c.id, name: c.name, mgPerWeek: c.mgPerWeek, doseMg: dose, intervalDays: c.intervalDays,
+        startDate: c.startDate, dayOfCycle, pinnedToday, dueToday, lastPin: last,
+        missedCount: missed, estBloodLevelMg: r1(level), steadyStateMg: r1(steadyState),
+        pctOfSteadyState: steadyState ? Math.min(100, Math.round((level / steadyState) * 100)) : 0,
+      };
+    });
+  }
+
+  // Daily estimated-level series for charting (last `days` days incl. today).
+  function cycleSeries(state, compoundId, days = 30) {
+    const c = (state.compounds || []).find((x) => x.id === compoundId);
+    if (!c) return [];
+    const pins = (state.pins || []).filter((p) => p.compoundId === c.id);
+    const t = dayNum(localDay(new Date()));
+    const start = Math.max(dayNum(c.startDate), t - days + 1);
+    const out = [];
+    for (let d = start; d <= t; d++) {
+      out.push({ date: new Date(d * DAY).toISOString().slice(0, 10), y: r1(compoundLevel(c, pins, d)) });
+    }
+    return out;
+  }
+
   /* ---------- THE DISTILLATION — context bundle for every AI call ---------- */
   function distill(state) {
     const ci = state.checkIns.find((x) => x.date === new Date().toISOString().slice(0, 10));
@@ -242,6 +299,8 @@ const Obs = (function () {
       unit: "lb",
       now: nowInfo(),
       profile: state.profile,
+      dossier: (typeof window !== "undefined" && window.BAKED && window.BAKED.dossier) || "",
+      cycle: cycleStatus(state),
       dietPhase: state.dietPhase,
       block: state.block,
       readinessToday: ci ? ci.readiness : null,
@@ -279,6 +338,7 @@ const Obs = (function () {
     liftSeries, liftSummaries, slopePerWeek, predictionMetrics,
     weightTrend, cardioSummary, adherence, exerciseROI,
     nutritionSummary, nowInfo, lifetime, allLiftIndex, distill,
+    cycleStatus, cycleSeries,
   };
 })();
 

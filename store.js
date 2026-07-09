@@ -18,11 +18,14 @@ const Store = (function () {
     v: 2,
     settings: { apiKey: CFG.apiKey || "", model: CFG.model || "claude-opus-4-8", backup: { token: "", repo: "", lastPushedAt: null, lastError: "" }, lastBackupAt: null },
     profile: {
-      sex: "", weightLb: null, heightCm: null, experience: "Beginner",
+      sex: "", birthYear: null, weightLb: null, heightCm: null, experience: "Beginner",
       goal: "Recomp (build muscle + lose fat)", goalNotes: "", known: "", proteinTarget: null, equipmentNotes: "",
       foodNotes: "", // likes/dislikes/allergies/cuisines — feeds the meal engine
+      dossier: "",   // athlete's own permanent notes for the coach (DEXA report paste, etc.)
+      stats: { bodyFatPct: null, leanMassLb: null, fatMassLb: null, boneMassLb: null, visceralFatG: null, boneDensityGcm2: null, rmrKcal: null, dexaDate: "" },
     },
     onboarded: false,
+    bakedVersion: 0, // last absorbed window.BAKED.version
 
     // The coach's living notebook about the athlete (AI-written).
     athleteModel: { text: "", pendingNotes: [], updatedAt: null },
@@ -39,6 +42,8 @@ const Store = (function () {
     checkIns: [],     // {date(YYYY-MM-DD), readiness:'rough'|'normal'|'great'} + weekly {nutrition,sleep,energy,notes}
     niggles: [],      // {id,area,note,status:'active'|'watch'|'resolved',created,updated}
     photos: [],       // {id,date,dataUrl} — downscaled, capped
+    compounds: [],    // {id,name,mgPerWeek,intervalDays,startDate,halfLifeDays,active}
+    pins: [],         // injection log: {id,date(YYYY-MM-DD local),compoundId,mg}
 
     // Program state
     block: { phase: "accumulation", weekNum: 1, startedAt: null, targets: {}, specialization: [], experiment: "" },
@@ -91,17 +96,44 @@ const Store = (function () {
         merged.settings = Object.assign(blank().settings, parsed.settings || {});
         merged.settings.backup = Object.assign(blank().settings.backup, (parsed.settings || {}).backup || {});
         merged.profile = Object.assign(blank().profile, parsed.profile || {});
+        merged.profile.stats = Object.assign(blank().profile.stats, (parsed.profile || {}).stats || {});
         merged.athleteModel = Object.assign(blank().athleteModel, parsed.athleteModel || {});
         merged.block = Object.assign(blank().block, parsed.block || {});
         merged.dietPhase = Object.assign(blank().dietPhase, parsed.dietPhase || {});
         merged.rollups = Object.assign(blank().rollups, parsed.rollups || {});
         if (!merged.settings.apiKey && CFG.apiKey) merged.settings.apiKey = CFG.apiKey;
-        return merged;
+        return bakeIn(merged);
       }
       const old = localStorage.getItem(OLD_KEY);
-      if (old) { const s = migrateV1(JSON.parse(old)); localStorage.setItem(KEY, JSON.stringify(s)); return s; }
-      return blank();
-    } catch { return blank(); }
+      if (old) { const s = migrateV1(JSON.parse(old)); localStorage.setItem(KEY, JSON.stringify(s)); return bakeIn(s); }
+      return bakeIn(blank());
+    } catch { return bakeIn(blank()); }
+  }
+
+  /* Absorb the baked dossier (baked.js). Facts win over stale state;
+     free-text fields only fill in when empty (the dossier text itself
+     always reaches the brain via window.BAKED, so nothing is lost). */
+  function bakeIn(s) {
+    const B = (typeof window !== "undefined" && window.BAKED) || null;
+    if (!B || (s.bakedVersion || 0) >= B.version) return s;
+    const p = s.profile, bp = B.profile || {};
+    for (const k of ["sex", "birthYear", "heightCm", "experience"]) if (bp[k] != null) p[k] = bp[k];
+    for (const k of ["goalNotes", "foodNotes", "equipmentNotes", "known"]) if (bp[k] && !p[k]) p[k] = bp[k];
+    for (const k of Object.keys(B.stats || {})) if (B.stats[k] != null && B.stats[k] !== "") p.stats[k] = B.stats[k];
+    // current weight is a live fact — refresh unless a newer weigh-in exists
+    const newest = (s.weighIns || []).map((w) => w.date).sort().pop() || "";
+    if (bp.weightLb && newest < B.asOf) {
+      p.weightLb = bp.weightLb;
+      s.weighIns = (s.weighIns || []).filter((w) => w.date !== B.asOf)
+        .concat([{ date: B.asOf, lb: bp.weightLb }]).sort((a, b) => (a.date < b.date ? -1 : 1));
+    }
+    if (!(s.compounds || []).length && B.compounds) s.compounds = JSON.parse(JSON.stringify(B.compounds));
+    if (!(s.pins || []).length && B.pins) s.pins = JSON.parse(JSON.stringify(B.pins));
+    // the dossier IS the onboarding — never make the owner re-enter himself
+    if (p.sex && p.weightLb && p.goalNotes) s.onboarded = true;
+    s.bakedVersion = B.version;
+    try { localStorage.setItem(KEY, JSON.stringify(s)); } catch { /* private mode */ }
+    return s;
   }
 
   function save() { localStorage.setItem(KEY, JSON.stringify(state)); }
@@ -117,6 +149,18 @@ const Store = (function () {
     state.weighIns.push({ date: d, lb }); state.weighIns.sort((a, b) => a.date < b.date ? -1 : 1); save();
   }
   function todayWeighIn() { return state.weighIns.find((w) => w.date === today()) || null; }
+
+  /* ---------- cycle / pins (dates in the athlete's local day, Pacific) ---------- */
+  const vanToday = () => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Vancouver", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+  function logPin(compoundId, mg, date) {
+    const d = date || vanToday();
+    if (state.pins.some((p) => p.compoundId === compoundId && p.date === d)) return;
+    state.pins.push({ id: uid(), date: d, compoundId, mg }); save();
+  }
+  function unlogPin(compoundId, date) {
+    const d = date || vanToday();
+    state.pins = state.pins.filter((p) => !(p.compoundId === compoundId && p.date === d)); save();
+  }
   function setReadiness(readiness) {
     const d = today();
     let c = state.checkIns.find((x) => x.date === d);
@@ -233,7 +277,7 @@ const Store = (function () {
   function reset() { const key = state.settings.apiKey; state = blank(); state.settings.apiKey = key; save(); }
 
   return {
-    get, save, uid, today,
+    get, save, uid, today, vanToday, logPin, unlogPin,
     setNutritionTargets, addMeal, deleteMeal, mealsToday, addRecipe, deleteRecipe,
     addSession, addCardio, addWeighIn, todayWeighIn, setReadiness, todayCheckIn,
     addNiggle, cycleNiggle, addPhoto,

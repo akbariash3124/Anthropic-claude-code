@@ -123,10 +123,33 @@
     const wt = Obs.weightTrend(S());
     $("#weighTrend").textContent = wt.lbPerWeek != null ? `trend ${wt.lbPerWeek > 0 ? "+" : ""}${wt.lbPerWeek} lb/wk` : (wt.latest ? `latest ${wt.latest} lb` : "log daily for the trend");
 
+    renderCycle();
     renderNutriLine();
     renderBackupNudge();
     renderReviewBanner();
     renderFocus(false);
+  }
+
+  function renderCycle() {
+    const el = $("#cycleCard");
+    const cy = Obs.cycleStatus(S());
+    if (!cy || !cy.length) { el.classList.add("hidden"); return; }
+    el.classList.remove("hidden");
+    el.innerHTML = `<div class="dc-label">Cycle · day ${cy[0].dayOfCycle} 💉</div>` + cy.map((c) => {
+      const cadence = c.intervalDays === 1 ? "daily" : c.intervalDays === 3.5 ? "2×/wk" : `every ${c.intervalDays}d`;
+      return `<div class="cycle-row">
+        <div class="cycle-info"><b>${esc(c.name)}</b> <span class="muted-sm">${c.mgPerWeek} mg/wk · ${cadence}</span>
+          <div class="muted-sm">~${c.estBloodLevelMg} mg in system · ${c.pctOfSteadyState}% of steady state${c.missedCount ? ` · <span class="cycle-missed">${c.missedCount} missed</span>` : ""}</div>
+        </div>
+        <button class="chip ${c.pinnedToday ? "active" : ""}" data-pin="${esc(c.id)}">${c.pinnedToday ? "Pinned ✓" : c.dueToday ? `Pin ${c.doseMg} mg` : "Not due"}</button>
+      </div>`;
+    }).join("");
+    $$("#cycleCard [data-pin]").forEach((b) => b.addEventListener("click", () => {
+      const c = cy.find((x) => x.id === b.dataset.pin);
+      if (c.pinnedToday) { Store.unlogPin(c.id); toast("Pin removed"); }
+      else { Store.logPin(c.id, c.doseMg); toast(`${c.name} logged 💉`); }
+      renderCycle();
+    }));
   }
 
   function renderBackupNudge() {
@@ -782,6 +805,7 @@
     renderLedger();
     renderStrength();
     renderWeightChart();
+    renderCycleChart();
     renderNiggles();
     renderPhotos();
     renderLastReview();
@@ -860,6 +884,19 @@
     $("#weightChart").innerHTML =
       (wt.lbPerWeek != null ? `<div class="muted-sm" style="margin-bottom:8px">Trend: <b style="color:var(--text)">${wt.lbPerWeek > 0 ? "+" : ""}${wt.lbPerWeek} lb/wk</b> · latest ${wt.latest} lb</div>` : "") +
       lineChart(pts, { id: "g2", color: "#8b6dff", empty: "Daily weigh-ins build the trend the recomp verdict runs on." });
+  }
+
+  function renderCycleChart() {
+    const panel = $("#cyclePanel");
+    const cy = Obs.cycleStatus(S());
+    if (!cy || !cy.length) { panel.classList.add("hidden"); return; }
+    panel.classList.remove("hidden");
+    const colors = ["#ff7a59", "#33d6c0", "#8b6dff"];
+    $("#cycleChart").innerHTML = cy.map((c, i) => {
+      const pts = Obs.cycleSeries(S(), c.id, 30);
+      return `<div class="muted-sm" style="margin:${i ? 14 : 0}px 0 6px"><b style="color:var(--text)">${esc(c.name)}</b> — est. mg in system · steady state ≈ ${c.steadyStateMg} mg</div>` +
+        lineChart(pts, { id: `gcy${i}`, color: colors[i % colors.length], empty: "Log pins to see levels." });
+    }).join("");
   }
 
   function renderNiggles() {
@@ -1181,6 +1218,13 @@
     $("#meProtein").value = p.proteinTarget || "";
     $("#meEquip").value = p.equipmentNotes || "";
     $("#meKnown").value = p.known || "";
+    const st = p.stats || {};
+    $("#meBF").value = st.bodyFatPct ?? "";
+    $("#meLean").value = st.leanMassLb ?? "";
+    $("#meFatM").value = st.fatMassLb ?? "";
+    $("#meRMR").value = st.rmrKcal ?? "";
+    $("#dexaDate").textContent = st.dexaDate ? `DEXA ${st.dexaDate}` : "";
+    $("#meDossier").value = p.dossier || "";
     $("#meKey").value = S().settings.apiKey;
     $("#meModel").value = S().settings.model;
     const bk = S().settings.backup || {};
@@ -1336,6 +1380,17 @@
         equipmentNotes: $("#meEquip").value.trim(), known: $("#meKnown").value.trim(),
       });
       S().recCache = null; Store.save(); renderToday(); toast("Profile saved");
+    });
+    $("#saveDexa").addEventListener("click", () => {
+      const p = S().profile;
+      Object.assign(p.stats, {
+        bodyFatPct: parseFloat($("#meBF").value) || null,
+        leanMassLb: parseFloat($("#meLean").value) || null,
+        fatMassLb: parseFloat($("#meFatM").value) || null,
+        rmrKcal: parseFloat($("#meRMR").value) || null,
+      });
+      p.dossier = $("#meDossier").value.trim();
+      S().recCache = null; Store.save(); toast("Saved — the coach knows");
     });
     $("#saveKey").addEventListener("click", () => { S().settings.apiKey = $("#meKey").value.trim(); S().settings.model = $("#meModel").value; Store.save(); renderToday(); toast("Saved"); });
 
