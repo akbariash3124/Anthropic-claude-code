@@ -36,6 +36,22 @@ Static page, no backend. All data on-device (localStorage). Pounds throughout.
 - **Forever:** hierarchical memory (weekly → block → career rollups) so month
   14 is smarter than month 2.
 
+### Nutrition (same brain, other half of recomp)
+- **📷 Snap a meal** → itemized calorie/protein/carb/fat estimate with stated
+  portion assumptions and confidence; portion-scale chips and a "fix it"
+  re-estimate; one tap logs it against AI-set daily targets.
+- **Targets set and tuned by the coach** — initial targets from your profile
+  and weight trend; the weekly review adjusts them from what you *actually*
+  logged, and the recomp verdict now adjudicates with real intake data.
+- **The deliciousness engine** — flavor-first meal suggestions (boring
+  bro-food is banned by system prompt), always in meal-prep format: 3–4
+  servings, fridge-stable, packable. Craving box + quick chips.
+- **Saved recipes → one-tap "log a serving"** — cook Sunday, tap Tuesday.
+- **Groceries mode** — "I'm at Whole Foods" → a sectioned, checkable list
+  with flavor-makers and the meals the haul turns into.
+- Nutrition feeds the Observatory distill, so daily focus, debriefs, and chat
+  all know today's intake and your 7-day adherence.
+
 ### Also in there
 Active-workout persistence (survives closing the app; sticky bar + finish →
 AI debrief), plate math, PR detection, niggle registry the coach programs

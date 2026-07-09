@@ -123,6 +123,7 @@
     const wt = Obs.weightTrend(S());
     $("#weighTrend").textContent = wt.lbPerWeek != null ? `trend ${wt.lbPerWeek > 0 ? "+" : ""}${wt.lbPerWeek} lb/wk` : (wt.latest ? `latest ${wt.latest} lb` : "log daily for the trend");
 
+    renderNutriLine();
     renderBackupNudge();
     renderReviewBanner();
     renderFocus(false);
@@ -175,6 +176,7 @@
     d.blockCall = Object.assign({ action: "continue", weekNum: 1, note: "" }, d.blockCall);
     d.dietCall = Object.assign({ mode: "hold_deficit", note: "" }, d.dietCall);
     d.cardioCall = Object.assign({ weeklyMinutes: 0, note: "" }, d.cardioCall);
+    d.nutritionCall = Object.assign({ calories: 0, protein: 0, carbs: 0, fat: 0, note: "" }, d.nutritionCall);
     const el = document.createElement("div");
     el.className = "review-card";
     const targets = (d.muscleTargets || []).map((t) => `<span><b>${esc(t.muscle)}</b> ${t.setsLow}–${t.setsHigh}</span>`).join("");
@@ -188,6 +190,7 @@
       `<div class="rv-section"><h4>Calls</h4>` +
       `<div class="rv-call">📦 <b>Block:</b> ${esc(d.blockCall.action.replace("_", " "))} — ${esc(d.blockCall.note)}</div>` +
       `<div class="rv-call">🍽 <b>Diet:</b> ${esc(d.dietCall.mode.replace(/_/g, " "))} — ${esc(d.dietCall.note)}</div>` +
+      (d.nutritionCall.calories > 0 ? `<div class="rv-call">🎯 <b>Targets:</b> ${d.nutritionCall.calories} cal · ${d.nutritionCall.protein}p / ${d.nutritionCall.carbs}c / ${d.nutritionCall.fat}f — ${esc(d.nutritionCall.note)}</div>` : "") +
       `<div class="rv-call">🫀 <b>Cardio:</b> ${d.cardioCall.weeklyMinutes} min/wk — ${esc(d.cardioCall.note)}</div>` +
       ((d.experiment && d.experiment.status !== "none") ? `<div class="rv-call">🧪 <b>Experiment (${esc(d.experiment.status)}):</b> ${esc(d.experiment.description)}${d.experiment.finding ? " · " + esc(d.experiment.finding) : ""}</div>` : "") +
       ((d.specialization && d.specialization.muscles.length) ? `<div class="rv-call">🎯 <b>Specializing:</b> ${d.specialization.muscles.map(esc).join(", ")} — ${esc(d.specialization.note)}</div>` : "") +
@@ -868,6 +871,234 @@
   }
 
   /* ============================================================
+     FOOD — photo logging, macro targets, the deliciousness engine
+     ============================================================ */
+  let fmode = "log";
+  let pendingMealPhoto = null;
+  let pendingMeal = null; // { base: analysis, scale: 1 }
+
+  function fstatus(html) { const s = $("#foodStatus"); if (html == null) { s.classList.add("hidden"); s.innerHTML = ""; } else { s.classList.remove("hidden"); s.innerHTML = html; } }
+  function setFmode(m) {
+    fmode = m;
+    $$("#foodSeg .seg").forEach((s) => s.classList.toggle("active", s.dataset.fmode === m));
+    $("#foodLog").classList.toggle("hidden", m !== "log");
+    $("#foodEat").classList.toggle("hidden", m !== "eat");
+    $("#foodShop").classList.toggle("hidden", m !== "shop");
+    fstatus(null);
+  }
+  const nut = () => Obs.nutritionSummary(S());
+  const scaled = (base, scale, k) => Math.round((base[k] || 0) * scale);
+
+  function renderFood() {
+    renderMacroBoard();
+    renderRecipeStrip();
+    renderTodayMeals();
+  }
+
+  function renderMacroBoard() {
+    const el = $("#macroBoard");
+    const n = nut();
+    if (!n.targets) {
+      el.innerHTML = `<div class="panel-head"><h2>Daily targets</h2></div>` +
+        `<p class="fineprint">The coach sets your calories &amp; macros from your profile, weight trend, and training — then tunes them every weekly review from what you actually log.</p>` +
+        `<button class="cta small" id="setTargetsBtn">Set my targets →</button>`;
+      $("#setTargetsBtn").addEventListener("click", async () => {
+        if (!ensureReady()) return;
+        const b = $("#setTargetsBtn"); b.disabled = true; b.textContent = "Calculating…";
+        try {
+          const t = await Brain.nutritionTargets();
+          Store.setNutritionTargets(t, "ai");
+          renderFood(); renderNutriLine();
+          toast(`Targets set: ${t.calories} cal · ${t.protein}g protein`);
+        } catch (e) { b.disabled = false; b.textContent = "Set my targets →"; handleErr(e); }
+      });
+      return;
+    }
+    const t = n.targets, d = n.today;
+    const bar = (name, cls, val, target, unit) => {
+      const pct = target ? Math.min(100, (val / target) * 100) : 0;
+      const over = target && val > target * 1.03;
+      return `<div class="mbar"><div class="mb-top"><span class="mb-name">${name}</span><span class="mb-num">${val} / ${target}${unit}</span></div>` +
+        `<div class="mb-track"><div class="mb-fill ${cls} ${over ? "over" : ""}" style="width:${pct}%"></div></div></div>`;
+    };
+    const calLeft = t.calories - d.calories, proLeft = t.protein - d.protein;
+    el.innerHTML =
+      `<div class="macro-remaining">${calLeft >= 0 ? `<b>${calLeft} cal</b> and <b>${Math.max(0, proLeft)}g protein</b> left today` : `<b style="color:var(--bad)">${-calLeft} cal over</b> today`}</div>` +
+      bar("Calories", "cal", d.calories, t.calories, "") +
+      bar("Protein", "pro", d.protein, t.protein, "g") +
+      `<div class="macro-mini">` + bar("Carbs", "carb", d.carbs, t.carbs, "g") + bar("Fat", "fat", d.fat, t.fat, "g") + `</div>`;
+  }
+
+  function renderNutriLine() {
+    const el = $("#nutriLine");
+    const n = nut();
+    if (!n.targets && !n.today.mealsLogged) { el.classList.add("hidden"); return; }
+    el.classList.remove("hidden");
+    el.innerHTML = n.targets
+      ? `<span>🍽 <b>${n.today.calories}</b>/${n.targets.calories} cal · <b>${n.today.protein}</b>/${n.targets.protein}g protein</span><span class="nl-go">log →</span>`
+      : `<span>🍽 <b>${n.today.calories}</b> cal · <b>${n.today.protein}</b>g protein today</span><span class="nl-go">targets →</span>`;
+  }
+
+  /* ---------- meal analysis + logging ---------- */
+  async function analyzeMealFlow(correction) {
+    if (!ensureReady()) return;
+    const text = $("#mealInput").value.trim();
+    if (!correction && !text && !pendingMealPhoto) { toast("Describe the meal or snap a photo"); return; }
+    fstatus(`<span class="spinner"></span><span class="pulse">${correction ? "Re-estimating with your fix…" : "Reading the plate…"}</span>`);
+    try {
+      const r = await Brain.analyzeMeal({
+        imageDataUrl: pendingMealPhoto, text,
+        correction: correction || null,
+        prior: correction && pendingMeal ? pendingMeal.base : null,
+      });
+      fstatus(null);
+      pendingMeal = { base: r, scale: 1 };
+      renderMealCard();
+    } catch (e) { fstatus(null); handleErr(e); }
+  }
+
+  function renderMealCard() {
+    const box = $("#mealResult");
+    if (!pendingMeal) { box.innerHTML = ""; return; }
+    const { base, scale } = pendingMeal;
+    const m = (k) => scaled(base, scale, k);
+    const items = (base.items || []).map((i) => `<b>${esc(i.name)}</b> ${Math.round(i.calories * scale)} cal · ${Math.round(i.protein * scale)}p`).join(" · ");
+    const chips = [0.75, 1, 1.25, 1.5, 2].map((s) => `<button class="chip ${s === scale ? "active" : ""}" data-scale="${s}">${s === 1 ? "as-is" : s + "×"}</button>`).join("");
+    box.innerHTML =
+      `<div class="meal-card">` +
+      `<span class="ir-conf ${esc(base.confidence)} mc-conf">${esc(base.confidence)}</span>` +
+      `<div class="mc-name">${esc(base.name)}</div>` +
+      `<div class="mc-macros">` +
+      `<div class="mc-macro"><b>${m("calories")}</b><span>cal</span></div>` +
+      `<div class="mc-macro"><b>${m("protein")}g</b><span>protein</span></div>` +
+      `<div class="mc-macro"><b>${m("carbs")}g</b><span>carbs</span></div>` +
+      `<div class="mc-macro"><b>${m("fat")}g</b><span>fat</span></div>` +
+      `</div>` +
+      (items ? `<div class="mc-items">${items}</div>` : "") +
+      (base.assumptions ? `<div class="mc-assump">⚖ ${esc(base.assumptions)}</div>` : "") +
+      `<div class="scale-chips">${chips}</div>` +
+      `<div class="fixrow"><input type="text" id="mealFix" placeholder="fix it: 'that was 2 cups rice, no oil'…" /><button id="mealFixGo">Fix</button></div>` +
+      `<div class="sg-actions"><button class="cta small" id="mealLogGo">Log it ✓</button><button class="ghost" id="mealDiscard">Discard</button></div>` +
+      `</div>`;
+    $$("#mealResult [data-scale]").forEach((c) => c.addEventListener("click", () => { pendingMeal.scale = parseFloat(c.dataset.scale); renderMealCard(); }));
+    $("#mealFixGo").addEventListener("click", () => { const fx = $("#mealFix").value.trim(); if (fx) analyzeMealFlow(fx); });
+    $("#mealFix").addEventListener("keydown", (e) => { if (e.key === "Enter") { const fx = $("#mealFix").value.trim(); if (fx) analyzeMealFlow(fx); } });
+    $("#mealLogGo").addEventListener("click", logPendingMeal);
+    $("#mealDiscard").addEventListener("click", () => { pendingMeal = null; renderMealCard(); });
+  }
+
+  function logPendingMeal() {
+    const { base, scale } = pendingMeal;
+    Store.addMeal({
+      name: base.name + (scale !== 1 ? ` (${scale}×)` : ""),
+      items: base.items, method: pendingMealPhoto ? "photo" : "text",
+      calories: scaled(base, scale, "calories"), protein: scaled(base, scale, "protein"),
+      carbs: scaled(base, scale, "carbs"), fat: scaled(base, scale, "fat"),
+      confidence: base.confidence,
+    });
+    pendingMeal = null; clearMealPhoto(); $("#mealInput").value = "";
+    renderMealCard(); renderFood(); renderNutriLine();
+    Backup.auto("meal");
+    const n = nut();
+    toast(n.targets ? `Logged ✓ ${Math.max(0, n.targets.protein - n.today.protein)}g protein to go today` : "Logged ✓");
+  }
+
+  function renderTodayMeals() {
+    const meals = Store.mealsToday().slice().reverse();
+    $("#todayMeals").innerHTML = meals.length
+      ? meals.map((m) => `<div class="meal-row"><div class="mr-body"><div class="mr-name">${esc(m.name)}</div>` +
+        `<div class="mr-macros">${m.calories} cal · ${m.protein}p · ${m.carbs}c · ${m.fat}f</div></div>` +
+        `<button class="mr-del" data-mealdel="${m.id}">✕</button></div>`).join("")
+      : `<p class="empty">Nothing logged today. Snap your next meal.</p>`;
+    $$("#todayMeals [data-mealdel]").forEach((b) => b.addEventListener("click", () => { Store.deleteMeal(b.dataset.mealdel); renderFood(); renderNutriLine(); }));
+  }
+
+  function renderRecipeStrip() {
+    const rs = S().recipes;
+    $("#recipeStrip").innerHTML = rs.map((r) =>
+      `<div class="recipe-chip"><div class="rc-name">${esc(r.name)}</div>` +
+      `<div class="rc-mac">${r.perServing.calories} cal · ${r.perServing.protein}p /serv</div>` +
+      `<button class="rc-log" data-recipelog="${r.id}">＋ Log serving</button></div>`).join("");
+    $$("#recipeStrip [data-recipelog]").forEach((b) => b.addEventListener("click", () => {
+      const r = S().recipes.find((x) => x.id === b.dataset.recipelog); if (!r) return;
+      Store.addMeal({ name: r.name + " (1 serving)", items: [], method: "recipe", calories: r.perServing.calories, protein: r.perServing.protein, carbs: r.perServing.carbs, fat: r.perServing.fat, confidence: "high" });
+      renderFood(); renderNutriLine(); Backup.auto("meal");
+      toast(`${r.name} logged 🍽`);
+    }));
+  }
+
+  /* ---------- suggestions (the deliciousness engine) ---------- */
+  async function runSuggest(ask) {
+    if (!ensureReady()) return;
+    if (!ask) { toast("Tell me what you're craving"); return; }
+    $("#suggestResult").innerHTML = "";
+    fstatus(`<span class="spinner"></span><span class="pulse">Cooking up something you'll actually want to eat…</span>`);
+    try {
+      const r = await Brain.suggestMeals(ask);
+      fstatus(null);
+      const box = $("#suggestResult");
+      box.innerHTML = `<div class="sugg-intro">${esc(r.intro)}</div>`;
+      (r.suggestions || []).forEach((s) => box.appendChild(suggCard(s)));
+    } catch (e) { fstatus(null); handleErr(e); }
+  }
+
+  function suggCard(s) {
+    const el = document.createElement("div");
+    el.className = "sugg-card";
+    el.innerHTML =
+      `<div class="sg-name">${esc(s.name)}</div>` +
+      `<div class="sg-hook">${esc(s.hook)}</div>` +
+      `<div class="sg-meta">` +
+      `<span class="pill">${s.perServing.calories} cal</span><span class="pill">${s.perServing.protein}g protein</span>` +
+      `<span class="pill">${s.servings} serving${s.servings === 1 ? "" : "s"}</span><span class="pill">${s.prepMinutes} min</span>` +
+      `<span class="pill">keeps ${s.keepsDays}d</span>` +
+      `</div>` +
+      `<button class="linkbtn" data-sgtoggle>Recipe ▾</button>` +
+      `<div class="sg-detail hidden">` +
+      `<h5>Ingredients</h5><ul>${(s.ingredients || []).map((i) => `<li>${esc(i)}</li>`).join("")}</ul>` +
+      `<h5>Steps</h5><ol>${(s.steps || []).map((x) => `<li>${esc(x)}</li>`).join("")}</ol>` +
+      (s.prepNote ? `<div class="sg-prepnote">📦 ${esc(s.prepNote)}</div>` : "") +
+      `</div>` +
+      `<div class="sg-actions"><button class="cta small" data-sgsave>Save recipe</button><button class="ghost" data-sglog>Log 1 serving</button></div>`;
+    el.addEventListener("click", (e) => {
+      if (e.target.closest("[data-sgtoggle]")) { $(".sg-detail", el).classList.toggle("hidden"); return; }
+      if (e.target.closest("[data-sgsave]")) {
+        Store.addRecipe({ name: s.name, hook: s.hook, servings: s.servings, perServing: s.perServing, prepMinutes: s.prepMinutes, keepsDays: s.keepsDays, ingredients: s.ingredients, steps: s.steps, prepNote: s.prepNote });
+        renderRecipeStrip(); toast("Saved — one-tap log it from the Food tab 🍽");
+      }
+      if (e.target.closest("[data-sglog]")) {
+        Store.addMeal({ name: s.name + " (1 serving)", items: [], method: "recipe", calories: s.perServing.calories, protein: s.perServing.protein, carbs: s.perServing.carbs, fat: s.perServing.fat, confidence: "high" });
+        renderNutriLine(); Backup.auto("meal"); toast("Logged 🍽");
+      }
+    });
+    return el;
+  }
+
+  /* ---------- groceries ---------- */
+  async function runShop() {
+    if (!ensureReady()) return;
+    const where = $("#shopInput").value.trim() || "a regular grocery run for the week";
+    $("#shopResult").innerHTML = "";
+    fstatus(`<span class="spinner"></span><span class="pulse">Building your list…</span>`);
+    try {
+      const r = await Brain.groceryList(where);
+      fstatus(null);
+      const box = $("#shopResult");
+      box.innerHTML =
+        `<div class="shop-card"><div class="sugg-intro" style="margin-top:0">${esc(r.intro)}</div>` +
+        (r.sections || []).map((sec) =>
+          `<h4>${esc(sec.title)}</h4>` +
+          sec.items.map((i) => `<label class="shop-item"><input type="checkbox" /> <span>${esc(i.item)} <span class="si-note">— ${esc(i.note)}</span></span></label>`).join("")
+        ).join("") +
+        ((r.mealIdeas || []).length ? `<h4>This turns into</h4><div class="sg-meta">${r.mealIdeas.map((m) => `<span class="pill">${esc(m)}</span>`).join("")}</div>` : "") +
+        `</div>`;
+      $$("#shopResult .shop-item input").forEach((c) => c.addEventListener("change", () => c.closest(".shop-item").classList.toggle("checked", c.checked)));
+    } catch (e) { fstatus(null); handleErr(e); }
+  }
+
+  function clearMealPhoto() { pendingMealPhoto = null; $("#mealPhotoChip").classList.add("hidden"); $("#mealPhotoChip").innerHTML = ""; }
+
+  /* ============================================================
      ME
      ============================================================ */
   function renderMe() {
@@ -876,6 +1107,7 @@
     $("#meWeight").value = p.weightLb || "";
     const h = cmToFtIn(p.heightCm); $("#meFt").value = h.ft; $("#meIn").value = h.in;
     $("#meNotes").value = p.goalNotes || "";
+    $("#meFood").value = p.foodNotes || "";
     $("#meProtein").value = p.proteinTarget || "";
     $("#meEquip").value = p.equipmentNotes || "";
     $("#meKnown").value = p.known || "";
@@ -897,6 +1129,7 @@
     $$(".view").forEach((s) => s.classList.toggle("active", s.id === `view-${v}`));
     if (v === "today") renderToday();
     if (v === "train") renderRecentChips();
+    if (v === "food") renderFood();
     if (v === "coach") renderChat();
     if (v === "trends") renderTrends();
     if (v === "me") renderMe();
@@ -985,6 +1218,22 @@
     $("#wbFinish").addEventListener("click", finishWorkout);
     $("#restSkip").addEventListener("click", stopRest);
 
+    // food
+    $("#nutriLine").addEventListener("click", () => switchView("food"));
+    $("#foodSeg").addEventListener("click", (e) => { const b = e.target.closest(".seg"); if (b) setFmode(b.dataset.fmode); });
+    $("#mealCam").addEventListener("click", () => $("#mealPhotoInput").click());
+    $("#mealPhotoInput").addEventListener("change", (e) => {
+      if (e.target.files[0]) readImg(e.target.files[0], 1024, (d) => { pendingMealPhoto = d; $("#mealPhotoChip").innerHTML = `📷 meal photo attached <button id="rmMealPhoto">✕</button>`; $("#mealPhotoChip").classList.remove("hidden"); $("#rmMealPhoto").addEventListener("click", clearMealPhoto); });
+      e.target.value = "";
+    });
+    $("#mealAnalyze").addEventListener("click", () => analyzeMealFlow(null));
+    $("#mealInput").addEventListener("keydown", (e) => { if (e.key === "Enter") analyzeMealFlow(null); });
+    $("#cravingChips").addEventListener("click", (e) => { const c = e.target.closest(".chip"); if (!c) return; $("#craveInput").value = c.dataset.crave; runSuggest(c.dataset.crave); });
+    $("#craveGo").addEventListener("click", () => runSuggest($("#craveInput").value.trim()));
+    $("#craveInput").addEventListener("keydown", (e) => { if (e.key === "Enter") runSuggest($("#craveInput").value.trim()); });
+    $("#shopGo").addEventListener("click", runShop);
+    $("#shopInput").addEventListener("keydown", (e) => { if (e.key === "Enter") runShop(); });
+
     // chat
     $("#chatSend").addEventListener("click", sendChat);
     $("#chatInput").addEventListener("keydown", (e) => { if (e.key === "Enter") sendChat(); });
@@ -1012,7 +1261,8 @@
         sex: chipVal("#meSex"), weightLb: parseFloat($("#meWeight").value) || null,
         heightCm: ftInToCm($("#meFt").value, $("#meIn").value),
         experience: chipVal("#meExp") || "Beginner",
-        goalNotes: $("#meNotes").value.trim(), proteinTarget: parseFloat($("#meProtein").value) || null,
+        goalNotes: $("#meNotes").value.trim(), foodNotes: $("#meFood").value.trim(),
+        proteinTarget: parseFloat($("#meProtein").value) || null,
         equipmentNotes: $("#meEquip").value.trim(), known: $("#meKnown").value.trim(),
       });
       S().recCache = null; Store.save(); renderToday(); toast("Profile saved");

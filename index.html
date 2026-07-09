@@ -51,6 +51,7 @@
         </div>
       </div>
 
+      <div id="nutriLine" class="nutri-line hidden"></div>
       <div id="backupNudge" class="keybanner hidden"></div>
       <div id="reviewBanner" class="review-banner hidden"></div>
       <div id="focusRec" class="focus-rec hidden"></div>
@@ -132,6 +133,59 @@
       </div>
     </section>
 
+    <!-- ===================== FOOD ===================== -->
+    <section id="view-food" class="view">
+      <header class="apphead"><div><div class="hello">Food</div><div class="subhello" id="foodSub">Snap it, log it, stay on target.</div></div></header>
+
+      <div id="macroBoard" class="panel"></div>
+
+      <div class="segmented" id="foodSeg">
+        <button class="seg active" data-fmode="log">Log a meal</button>
+        <button class="seg" data-fmode="eat">What do I eat?</button>
+        <button class="seg" data-fmode="shop">Groceries</button>
+      </div>
+
+      <!-- log -->
+      <div id="foodLog" class="entry">
+        <div class="bigfield">
+          <input type="text" id="mealInput" placeholder="describe it… or just snap it →" autocomplete="off" />
+          <button id="mealCam" class="iconbtn" aria-label="Photo">📷</button>
+        </div>
+        <div id="mealPhotoChip" class="photo-chip hidden"></div>
+        <button id="mealAnalyze" class="cta">Estimate &amp; log →</button>
+        <div id="mealResult"></div>
+        <div id="recipeStrip"></div>
+        <div id="todayMeals" class="sessions" style="margin-top:16px"></div>
+      </div>
+
+      <!-- eat -->
+      <div id="foodEat" class="entry hidden">
+        <div class="chips" id="cravingChips">
+          <button class="chip" data-crave="Surprise me — what should I eat right now?">Surprise me</button>
+          <button class="chip" data-crave="High-protein meal prep for the next few days">Meal prep</button>
+          <button class="chip" data-crave="I'm craving a snack">Snack</button>
+          <button class="chip" data-crave="Something sweet that won't wreck my day">Sweet</button>
+          <button class="chip" data-crave="Fast dinner, 20 minutes max">Quick dinner</button>
+        </div>
+        <div class="bigfield" style="margin-top:12px">
+          <input type="text" id="craveInput" placeholder="I'm craving… / I have chicken thighs and rice…" autocomplete="off" />
+        </div>
+        <button id="craveGo" class="cta">Feed me →</button>
+        <div id="suggestResult"></div>
+      </div>
+
+      <!-- shop -->
+      <div id="foodShop" class="entry hidden">
+        <div class="bigfield">
+          <input type="text" id="shopInput" placeholder="I'm at Whole Foods / Costco run for the week…" autocomplete="off" />
+        </div>
+        <button id="shopGo" class="cta">Build my list →</button>
+        <div id="shopResult"></div>
+      </div>
+
+      <div id="foodStatus" class="status hidden"></div>
+    </section>
+
     <!-- ===================== COACH (CHAT) ===================== -->
     <section id="view-coach" class="view">
       <header class="apphead"><div><div class="hello">Coach</div><div class="subhello">Ask anything — I know your data.</div></div></header>
@@ -211,6 +265,7 @@
         <div class="row">
           <label class="field"><span>Protein target (g, optional)</span><input type="number" id="meProtein" step="5" min="0" placeholder="160" /></label>
         </div>
+        <label class="field"><span>Food notes — likes, dislikes, allergies</span><textarea id="meFood" rows="2" placeholder="love spicy + Mexican/Asian; hate mushrooms; no shellfish…"></textarea></label>
         <label class="field"><span>Gym equipment notes (optional)</span><input type="text" id="meEquip" placeholder="dumbbells to 100 in 5s, no safety squat bar…" /></label>
         <label class="field"><span>Lifts you know (optional)</span><input type="text" id="meKnown" placeholder="bench 185x8, squat 225x5" /></label>
         <button id="saveMe" class="cta small">Save</button>
@@ -259,6 +314,7 @@
   <nav class="bottomnav" id="nav">
     <button class="navbtn active" data-view="today"><span>▲</span>Today</button>
     <button class="navbtn" data-view="train"><span>◆</span>Train</button>
+    <button class="navbtn" data-view="food"><span>●</span>Food</button>
     <button class="navbtn" data-view="coach"><span>◈</span>Coach</button>
     <button class="navbtn" data-view="trends"><span>∿</span>Trends</button>
     <button class="navbtn" data-view="me"><span>◉</span>Me</button>
@@ -268,6 +324,7 @@
   <div id="onboard" class="onboard hidden"><div class="ob-card"><div id="obBody"></div></div></div>
 
   <input type="file" id="photoInput" accept="image/*" capture="environment" class="hidden" />
+  <input type="file" id="mealPhotoInput" accept="image/*" capture="environment" class="hidden" />
   <input type="file" id="addExPhotoInput" accept="image/*" capture="environment" class="hidden" />
   <input type="file" id="physiquePhotoInput" accept="image/*" class="hidden" />
   <input type="file" id="importFile" accept="application/json" class="hidden" />

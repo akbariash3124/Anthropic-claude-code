@@ -329,6 +329,81 @@ textarea { background: var(--bg); border: 1px solid var(--line); color: var(--te
   border-radius: 12px; padding: 12px 14px; font-size: 13.5px; line-height: 1.55; margin-top: 10px; }
 .debrief b { color: var(--good); }
 
+/* ===== food ===== */
+.macro-remaining { font-size: 13px; color: var(--muted); margin-bottom: 12px; }
+.macro-remaining b { color: var(--text); font-size: 15px; }
+.mbar { margin-bottom: 10px; }
+.mbar .mb-top { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 4px; }
+.mbar .mb-name { color: var(--muted); font-weight: 700; text-transform: uppercase; letter-spacing: .04em; font-size: 10.5px; }
+.mbar .mb-num { font-variant-numeric: tabular-nums; color: var(--text); }
+.mbar .mb-track { height: 10px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.mbar .mb-fill { height: 100%; border-radius: 5px; transition: width .3s; }
+.mb-fill.cal { background: linear-gradient(90deg, var(--primary), var(--primary2)); }
+.mb-fill.pro { background: linear-gradient(90deg, var(--accent), #4ade80); }
+.mb-fill.carb { background: #fbbf24; } .mb-fill.fat { background: #f97316; }
+.mb-fill.over { background: var(--bad) !important; }
+.macro-mini { display: flex; gap: 10px; } .macro-mini .mbar { flex: 1; }
+
+/* meal analysis card */
+.meal-card { background: var(--card); border: 1px solid rgba(51,214,192,.35); border-radius: var(--radius); padding: 16px; margin-top: 14px; box-shadow: var(--shadow); animation: fade .25s ease; }
+.meal-card .mc-name { font-size: 18px; font-weight: 800; }
+.meal-card .mc-conf { float: right; }
+.meal-card .mc-macros { display: flex; gap: 8px; margin: 12px 0; }
+.mc-macro { flex: 1; background: var(--card2); border: 1px solid var(--line); border-radius: 11px; padding: 9px 4px; text-align: center; }
+.mc-macro b { display: block; font-size: 17px; }
+.mc-macro span { font-size: 10px; color: var(--muted); text-transform: uppercase; }
+.mc-items { font-size: 13px; color: var(--muted); line-height: 1.6; }
+.mc-items b { color: var(--text); font-weight: 600; }
+.mc-assump { font-size: 12px; color: var(--warn); margin-top: 8px; }
+.scale-chips { display: flex; gap: 6px; margin: 12px 0 4px; }
+.scale-chips .chip { padding: 7px 12px; font-size: 13px; }
+.fixrow { display: flex; gap: 8px; margin-top: 10px; }
+.fixrow input { flex: 1; background: var(--bg); border: 1px solid var(--line); color: var(--text); border-radius: 10px; padding: 10px 12px; font-size: 14px; }
+.fixrow button { background: var(--card2); border: 1px solid var(--line); color: var(--text); border-radius: 10px; padding: 0 14px; font-weight: 700; cursor: pointer; }
+
+/* meal rows */
+.meal-row { display: flex; align-items: center; gap: 10px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 10px 13px; }
+.meal-row .mr-body { flex: 1; min-width: 0; }
+.meal-row .mr-name { font-weight: 700; font-size: 14px; }
+.meal-row .mr-macros { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.meal-row .mr-del { background: none; border: none; color: var(--muted); font-size: 15px; cursor: pointer; flex: none; }
+
+/* recipe strip */
+#recipeStrip { display: flex; gap: 8px; overflow-x: auto; margin-top: 14px; padding-bottom: 4px; }
+#recipeStrip:empty { display: none; }
+.recipe-chip { flex: none; background: var(--card); border: 1px solid var(--line); border-radius: 13px; padding: 10px 13px; max-width: 180px; }
+.recipe-chip .rc-name { font-size: 13px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.recipe-chip .rc-mac { font-size: 11px; color: var(--muted); margin: 2px 0 7px; }
+.recipe-chip .rc-log { width: 100%; border: none; background: rgba(51,214,192,.15); color: var(--accent); border-radius: 8px; padding: 6px; font-size: 12px; font-weight: 800; cursor: pointer; }
+
+/* suggestion cards */
+.sugg-intro { margin-top: 14px; font-size: 14.5px; line-height: 1.5; }
+.sugg-card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; margin-top: 12px; box-shadow: var(--shadow); }
+.sugg-card .sg-name { font-size: 17px; font-weight: 800; }
+.sugg-card .sg-hook { font-size: 14px; line-height: 1.55; color: var(--text); margin: 6px 0 10px; }
+.sugg-card .sg-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.sg-meta .pill { font-size: 12px; }
+.sg-detail { border-top: 1px solid var(--line); padding-top: 10px; margin-top: 4px; }
+.sg-detail h5 { margin: 8px 0 5px; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.sg-detail ul, .sg-detail ol { margin: 0; padding-left: 20px; font-size: 13.5px; line-height: 1.65; }
+.sg-prepnote { font-size: 12.5px; color: var(--accent); margin-top: 8px; }
+.sg-actions { display: flex; gap: 8px; margin-top: 12px; }
+.sg-actions button { flex: 1; }
+
+/* grocery list */
+.shop-card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; margin-top: 14px; }
+.shop-card h4 { margin: 12px 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--accent); }
+.shop-item { display: flex; gap: 8px; align-items: baseline; padding: 5px 0; font-size: 14px; border-bottom: 1px dashed rgba(38,49,79,.6); }
+.shop-item:last-child { border-bottom: none; }
+.shop-item input[type="checkbox"] { accent-color: var(--accent); width: 17px; height: 17px; }
+.shop-item .si-note { color: var(--muted); font-size: 12px; }
+.shop-item.checked { opacity: .45; text-decoration: line-through; }
+
+/* nutrition line on Today */
+.nutri-line { display: flex; align-items: center; justify-content: space-between; gap: 10px; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; margin-bottom: 14px; cursor: pointer; font-size: 13.5px; }
+.nutri-line b { font-variant-numeric: tabular-nums; }
+.nutri-line .nl-go { color: var(--accent); font-weight: 800; }
+
 /* week summary */
 .weeksum { display: flex; align-items: center; gap: 16px; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; margin-bottom: 12px; }
 .weeksum > div { display: flex; flex-direction: column; }
