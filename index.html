@@ -51,6 +51,7 @@
         </div>
       </div>
 
+      <div id="briefCard" class="focus-rec hidden"></div>
       <div id="cycleCard" class="cycle-card hidden"></div>
       <div id="nutriLine" class="nutri-line hidden"></div>
       <div id="backupNudge" class="keybanner hidden"></div>
@@ -172,6 +173,7 @@
           <input type="text" id="craveInput" placeholder="I'm craving… / I have chicken thighs and rice…" autocomplete="off" />
         </div>
         <button id="craveGo" class="cta">Feed me →</button>
+        <button id="planGo" class="ghost" style="width:100%;margin-top:10px">📅 Plan my next few days + one grocery list</button>
         <div id="suggestResult"></div>
       </div>
 
@@ -221,6 +223,11 @@
       <div class="panel">
         <div class="panel-head"><h2>Bodyweight</h2></div>
         <div id="weightChart"></div>
+      </div>
+
+      <div class="panel hidden" id="dexaPanel">
+        <div class="panel-head"><h2>DEXA — recomp ground truth</h2><span class="muted-sm">monthly scans</span></div>
+        <div id="dexaChart"></div>
       </div>
 
       <div class="panel" id="cyclePanel">
@@ -289,7 +296,14 @@
           <label class="field"><span>RMR (kcal/day)</span><input type="number" id="meRMR" step="10" min="0" /></label>
         </div>
         <label class="field"><span>Permanent notes for the coach</span><textarea id="meDossier" rows="3" placeholder="Paste anything the coach should know forever — full DEXA report, bloodwork, injuries…"></textarea></label>
-        <button id="saveDexa" class="cta small">Save</button>
+        <div class="row">
+          <button id="saveDexa" class="cta small">Save</button>
+        </div>
+        <div class="row" style="margin-top:10px;align-items:flex-end">
+          <label class="field"><span>New monthly scan? Date</span><input type="date" id="meDexaDate" /></label>
+          <button id="logDexa" class="ghost">📊 Log as new scan</button>
+        </div>
+        <p class="fineprint">Each logged scan becomes a point on the recomp truth chart in Trends and re-anchors the coach's math.</p>
       </div>
 
       <div class="panel">
@@ -304,14 +318,19 @@
 
       <div class="panel">
         <div class="panel-head"><h2>Backup</h2><span class="muted-sm" id="backupStatus"></span></div>
-        <p class="fineprint">Auto-saves the coach's memory to a <b>private</b> GitHub repo after workouts and reviews.
-          Make a fine-grained token with Contents read/write on one private repo. The snapshot never contains your API key or this token.</p>
+        <p class="fineprint">Two minutes, once — then every workout, meal, and review auto-saves to your own private GitHub repo.</p>
+        <ol class="setup-steps">
+          <li><a href="https://github.com/new" target="_blank" rel="noopener">Create the repo →</a> name: <b>coach-backup</b> · visibility: <b>Private</b> · hit <b>Create repository</b>. Ignore everything else on that page.</li>
+          <li><a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">Create the token →</a> any name · Expiration: <b>1 year</b> · Repository access: <b>Only select repositories</b> → pick <b>coach-backup</b> · open <b>Repository permissions</b> → set <b>Contents</b> to <b>Read and write</b> · <b>Generate token</b> · copy it.</li>
+          <li>Paste it below with the repo as <b>yourusername/coach-backup</b>, then hit test.</li>
+        </ol>
         <label class="field"><span>GitHub token</span><input type="password" id="bkToken" placeholder="github_pat_…" autocomplete="off" /></label>
-        <label class="field"><span>Repo (owner/name)</span><input type="text" id="bkRepo" placeholder="you/coach-backups" autocomplete="off" /></label>
+        <label class="field"><span>Repo (owner/name)</span><input type="text" id="bkRepo" placeholder="akbariash3124/coach-backup" autocomplete="off" /></label>
         <div class="row">
-          <button class="cta small" id="bkSave">Save &amp; back up now</button>
+          <button class="cta small" id="bkSave">Test &amp; back up now</button>
           <button class="ghost" id="bkRestore">Restore from GitHub</button>
         </div>
+        <p class="fineprint">The snapshot never contains your API key or this token. If it fails, the message below the button tells you exactly which step to redo.</p>
       </div>
 
       <div class="panel">

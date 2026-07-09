@@ -40,6 +40,72 @@
   }
   function ensureReady() { if (!hasKey()) { switchView("me"); toast("Add your API key to start"); return false; } return true; }
 
+  /* ============================================================
+     VOICE — dictate into any field
+     ============================================================ */
+  const SRCls = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let activeRec = null;
+  const micHtml = (cls) => SRCls ? `<button type="button" class="micbtn ${cls || ""}" data-mic title="Speak">🎤</button>` : "";
+  function attachMic(input) {
+    if (!SRCls || !input || input._mic) return;
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "micbtn"; b.dataset.mic = "1"; b.title = "Speak"; b.textContent = "🎤";
+    input.insertAdjacentElement("afterend", b);
+    input._mic = true;
+  }
+  function dictate(btn) {
+    if (activeRec) { try { activeRec.stop(); } catch { /* already stopped */ } return; }
+    const prev = btn.previousElementSibling;
+    const target = (prev && /^(INPUT|TEXTAREA)$/.test(prev.tagName)) ? prev : $("input[type=text],textarea", btn.parentElement);
+    if (!target) return;
+    const rec = new SRCls();
+    rec.lang = "en-US"; rec.interimResults = true;
+    const base = target.value ? target.value.replace(/\s+$/, "") + " " : "";
+    btn.classList.add("listening"); btn.textContent = "◉";
+    rec.onresult = (ev) => {
+      let t = ""; for (let i = 0; i < ev.results.length; i++) t += ev.results[i][0].transcript;
+      target.value = base + t;
+    };
+    const end = () => { btn.classList.remove("listening"); btn.textContent = "🎤"; activeRec = null; target.dispatchEvent(new Event("input", { bubbles: true })); };
+    rec.onend = end; rec.onerror = end;
+    try { rec.start(); activeRec = rec; } catch { end(); }
+  }
+  document.addEventListener("click", (e) => {
+    const m = e.target.closest("[data-mic]"); if (!m) return;
+    e.preventDefault(); e.stopPropagation(); dictate(m);
+  }, true);
+
+  // Speak a set straight into the card: "185 for 8, 2 left" / "…to failure, done"
+  function voiceSet(el, btn) {
+    if (!SRCls) return;
+    if (activeRec) { try { activeRec.stop(); } catch { /* already stopped */ } return; }
+    const rec = new SRCls(); rec.lang = "en-US";
+    btn.classList.add("listening");
+    let heard = "";
+    rec.onresult = (ev) => { heard = ev.results[0][0].transcript; };
+    rec.onend = () => {
+      btn.classList.remove("listening"); activeRec = null;
+      if (!heard) return;
+      const t = heard.toLowerCase().replace(/[-,]/g, " ");
+      const m = t.match(/(\d+(?:\.\d+)?)\s*(?:pounds?|lbs?)?\s*(?:for|by|x|times)?\s+(\d+)(?:\s*reps?)?/);
+      if (!m) { toast(`Heard “${heard}” — say it like "185 for 8, 2 left"`); return; }
+      const row = workRows(el).find((r) => !r.classList.contains("done"));
+      if (!row) { toast("All sets already done"); return; }
+      $(".s-w", row).value = parseFloat(m[1]);
+      $(".s-r", row).value = parseInt(m[2], 10);
+      const rirM = t.match(/(\d+)\s*(?:left|in reserve|rir)/) || (/(failure|nothing left)/.test(t) ? [null, "0"] : null);
+      if (rirM && $(".s-rir", row)) $(".s-rir", row).value = Math.min(5, parseInt(rirM[1], 10));
+      if (/\b(done|finished|complete)\b/.test(t)) {
+        row.classList.add("done");
+        startRest(el._rest); checkAutoregulation(el, row); copilotAdjust(el);
+      }
+      persistActive();
+      toast(`Voice: ${m[1]} × ${m[2]}${rirM ? ` @ ${rirM[1]} left` : ""} ✓`);
+    };
+    rec.onerror = () => { btn.classList.remove("listening"); activeRec = null; };
+    try { rec.start(); activeRec = rec; } catch { btn.classList.remove("listening"); }
+  }
+
   function rirSelect(sel) {
     return `<select class="s-rir">` + [0, 1, 2, 3, 4, 5].map((v) =>
       `<option value="${v}"${v === sel ? " selected" : ""}>${v === 0 ? "0 · failure" : v === 5 ? "5+ · easy" : v + " left"}</option>`).join("") + `</select>`;
@@ -123,11 +189,34 @@
     const wt = Obs.weightTrend(S());
     $("#weighTrend").textContent = wt.lbPerWeek != null ? `trend ${wt.lbPerWeek > 0 ? "+" : ""}${wt.lbPerWeek} lb/wk` : (wt.latest ? `latest ${wt.latest} lb` : "log daily for the trend");
 
+    renderBrief();
     renderCycle();
     renderNutriLine();
     renderBackupNudge();
     renderReviewBanner();
     renderFocus(false);
+  }
+
+  /* ---------- morning brief: one paragraph, first open of the day ---------- */
+  function renderBrief() {
+    const el = $("#briefCard");
+    if (!hasKey() || !S().onboarded) { el.classList.add("hidden"); return; }
+    const cached = Store.todayBrief();
+    if (cached) { el.classList.remove("hidden"); el.innerHTML = briefHtml(cached); wireBrief(el); return; }
+    if (renderBrief._busy) return;
+    renderBrief._busy = true;
+    el.classList.remove("hidden");
+    el.innerHTML = `<span class="fr-kicker">☀ Brief</span><p class="brief-text"><span class="spinner"></span> <span class="pulse">Reading everything…</span></p>`;
+    Brain.morningBrief()
+      .then((d) => { Store.setBrief(d.brief); el.innerHTML = briefHtml(d.brief); wireBrief(el); })
+      .catch(() => el.classList.add("hidden"))
+      .finally(() => { renderBrief._busy = false; });
+  }
+  const briefHtml = (b) =>
+    `<span class="fr-kicker">☀ Brief · ${new Date().toLocaleDateString("en-US", { weekday: "long", timeZone: "America/Vancouver" })} <button class="linkbtn" data-briefrefresh title="Regenerate">↺</button></span>` +
+    `<p class="brief-text">${esc(b)}</p>`;
+  function wireBrief(el) {
+    $("[data-briefrefresh]", el)?.addEventListener("click", () => { S().briefCache = null; Store.save(); renderBrief(); });
   }
 
   function renderCycle() {
@@ -370,13 +459,14 @@
       (rx.rationale ? `<div class="rationale">${esc(rx.rationale)}</div>` : "") +
       (cues ? `<div class="cues">${cues}</div>` : "") +
       (warm.length ? `<div class="setgroup-label">Warm-up</div>` + warm.map((s, i) => setRow(restoredOr(rows, true, i, s), i, true)).join("") : "") +
-      `<div class="setgroup-label">Working sets · ${esc(unitOf(rx))}</div>` +
+      `<div class="setgroup-label">Working sets · ${esc(unitOf(rx))}${el._saved || !SRCls ? "" : ` <button type="button" class="micbtn vset" data-vset title="Speak a set — '185 for 8, 2 left'">🎤</button>`}</div>` +
       work.map((s, i) => setRow(restoredOr(rows, false, i, s), i, false, s)).join("") +
+      (el._saved ? "" : `<div class="copilot-note"></div>`) +
       (rx.equipment === "barbell" && unitOf(rx).startsWith("lb") ? `<button class="plates-btn" data-act="plates">🏋 plate math</button><div class="plates-line hidden"></div>` : "") +
       (el._saved ? "" : eqSwapHtml(rx)) +
       `<button class="redial" data-act="feeler">🎯 Off? Mark done sets, re-dial the rest</button>` + feelerHint +
       (el._saved ? "" :
-        `<div class="fixrow adj"><input type="text" class="adj-input" placeholder="tell the coach: 'set 1 too heavy' / 'machine is numbered 1–15'…" /><button class="adj-go" data-act="adjust">Apply</button></div>`) +
+        `<div class="fixrow adj"><input type="text" class="adj-input" placeholder="tell the coach: 'set 1 too heavy' / 'machine is numbered 1–15'…" />${micHtml()}<button class="adj-go" data-act="adjust">Apply</button></div>`) +
       `<div class="card-actions">` +
       (el._saved ? `<div class="notice" style="width:100%">✓ Logged.</div>` :
         `<button class="cta small" data-act="save">Log this exercise</button>` +
@@ -432,6 +522,8 @@
     const el = e.currentTarget;
     const ll = e.target.closest("[data-ll]");
     if (ll) { $(".ll-extra", ll)?.classList.toggle("hidden"); return; }
+    const vs = e.target.closest("[data-vset]");
+    if (vs) { voiceSet(el, vs); return; }
     const done = e.target.closest(".donebtn");
     if (done) {
       const row = done.closest(".setrow");
@@ -440,6 +532,7 @@
         startRest(el._rest);
         checkAutoregulation(el, row);
       }
+      copilotAdjust(el);
       persistActive();
       return;
     }
@@ -457,6 +550,50 @@
       toast(`${el._rx.resolvedName} removed`);
     }
   }
+
+  /* ---------- live copilot: every done set silently re-dials the rest ---------- */
+  function copilotAdjust(el) {
+    clearTimeout(el._copilotT);
+    if (el._saved) return;
+    const rows = workRows(el);
+    const done = rows.filter((r) => r.classList.contains("done"));
+    const undone = rows.filter((r) => !r.classList.contains("done"));
+    if (!done.length || !undone.length) { setCopilotNote(el, ""); return; }
+    el._copilotT = setTimeout(async () => {
+      if (el._copilotBusy) { el._copilotAgain = true; return; }
+      el._copilotBusy = true;
+      setCopilotNote(el, `<span class="spinner"></span> coach is reading that set…`);
+      try {
+        const doneNow = workRows(el).filter((r) => r.classList.contains("done")).map(readRow).filter((s) => s.r > 0);
+        const undoneNow = workRows(el).filter((r) => !r.classList.contains("done"));
+        if (!doneNow.length || !undoneNow.length) { setCopilotNote(el, ""); throw new Error("state moved"); }
+        const completedSets = doneNow.map((s) => ({ weight: s.w, reps: s.r, rir: s.rir }));
+        const nrx = await Brain.coach({
+          exerciseName: el._rx.resolvedName,
+          feeler: completedSets[completedSets.length - 1],
+          completedSets, remainingCount: undoneNow.length,
+        });
+        const fresh = (nrx.workingSets || []).slice(0, undoneNow.length);
+        let changed = false;
+        const stillUndone = workRows(el).filter((r) => !r.classList.contains("done"));
+        stillUndone.forEach((r, i) => {
+          const s = fresh[i]; if (!s) return;
+          const wEl = $(".s-w", r), rEl = $(".s-r", r);
+          if (parseFloat(wEl.value) !== s.weight || parseInt(rEl.value, 10) !== s.reps) changed = true;
+          wEl.value = s.weight; rEl.value = s.reps;
+          const rirEl = $(".s-rir", r); if (rirEl && s.targetRIR != null) rirEl.value = s.targetRIR;
+          r.classList.remove("copilot-flash"); void r.offsetWidth; r.classList.add("copilot-flash");
+        });
+        el._rx.workingSets = workRows(el).filter((r) => r.classList.contains("done")).map(readRow)
+          .map((d) => ({ weight: d.w, reps: d.r, targetRIR: d.rir != null ? d.rir : 1 })).concat(fresh);
+        setCopilotNote(el, changed ? `↺ ${esc((nrx.rationale || "next sets adjusted to that set").slice(0, 110))}` : "✓ on track — next sets stand");
+        persistActive();
+      } catch { setCopilotNote(el, ""); }
+      el._copilotBusy = false;
+      if (el._copilotAgain) { el._copilotAgain = false; copilotAdjust(el); }
+    }, 1200);
+  }
+  function setCopilotNote(el, html) { const n = $(".copilot-note", el); if (n) n.innerHTML = html; }
 
   /* ---------- equipment conversion ---------- */
   async function convertEquipment(el, target) {
@@ -805,6 +942,7 @@
     renderLedger();
     renderStrength();
     renderWeightChart();
+    renderDexaChart();
     renderCycleChart();
     renderNiggles();
     renderPhotos();
@@ -884,6 +1022,26 @@
     $("#weightChart").innerHTML =
       (wt.lbPerWeek != null ? `<div class="muted-sm" style="margin-bottom:8px">Trend: <b style="color:var(--text)">${wt.lbPerWeek > 0 ? "+" : ""}${wt.lbPerWeek} lb/wk</b> · latest ${wt.latest} lb</div>` : "") +
       lineChart(pts, { id: "g2", color: "#8b6dff", empty: "Daily weigh-ins build the trend the recomp verdict runs on." });
+  }
+
+  function renderDexaChart() {
+    const panel = $("#dexaPanel");
+    const scans = S().dexaScans || [];
+    if (!scans.length) { panel.classList.add("hidden"); return; }
+    panel.classList.remove("hidden");
+    if (scans.length === 1) {
+      const s0 = scans[0];
+      $("#dexaChart").innerHTML = `<p class="empty">Baseline ${esc(s0.date)}: <b>${s0.bodyFatPct}% BF · ${s0.leanMassLb} lb lean</b>. Log next month's scan in Me → Body scan and this becomes the recomp truth chart.</p>`;
+      return;
+    }
+    const bf = scans.filter((s) => s.bodyFatPct != null).map((s) => ({ date: s.date, y: s.bodyFatPct }));
+    const lean = scans.filter((s) => s.leanMassLb != null).map((s) => ({ date: s.date, y: s.leanMassLb }));
+    const d0 = scans[0], d1 = scans[scans.length - 1];
+    const delta = (a, b, unit) => (a != null && b != null) ? `${b - a > 0 ? "+" : ""}${r1(b - a)}${unit}` : "—";
+    $("#dexaChart").innerHTML =
+      `<div class="muted-sm" style="margin-bottom:8px">Since ${esc(d0.date)}: <b style="color:var(--text)">${delta(d0.leanMassLb, d1.leanMassLb, " lb lean")}</b> · <b style="color:var(--text)">${delta(d0.bodyFatPct, d1.bodyFatPct, "% BF")}</b></div>` +
+      `<div class="muted-sm" style="margin-bottom:6px"><b style="color:var(--text)">Body fat %</b></div>` + lineChart(bf, { id: "gdx1", color: "#ff7a59", empty: "" }) +
+      `<div class="muted-sm" style="margin:14px 0 6px"><b style="color:var(--text)">Lean mass (lb)</b></div>` + lineChart(lean, { id: "gdx2", color: "#33d6c0", empty: "" });
   }
 
   function renderCycleChart() {
@@ -1182,6 +1340,12 @@
   }
 
   /* ---------- groceries ---------- */
+  const shopSectionsHtml = (sections) => (sections || []).map((sec) =>
+    `<h4>${esc(sec.title)}</h4>` +
+    sec.items.map((i) => `<label class="shop-item"><input type="checkbox" /> <span>${esc(i.item)} <span class="si-note">— ${esc(i.note)}</span></span></label>`).join("")
+  ).join("");
+  const wireShopChecks = (root) => $$(".shop-item input", root).forEach((c) => c.addEventListener("change", () => c.closest(".shop-item").classList.toggle("checked", c.checked)));
+
   async function runShop() {
     if (!ensureReady()) return;
     const where = $("#shopInput").value.trim() || "a regular grocery run for the week";
@@ -1193,13 +1357,32 @@
       const box = $("#shopResult");
       box.innerHTML =
         `<div class="shop-card"><div class="sugg-intro" style="margin-top:0">${esc(r.intro)}</div>` +
-        (r.sections || []).map((sec) =>
-          `<h4>${esc(sec.title)}</h4>` +
-          sec.items.map((i) => `<label class="shop-item"><input type="checkbox" /> <span>${esc(i.item)} <span class="si-note">— ${esc(i.note)}</span></span></label>`).join("")
-        ).join("") +
+        shopSectionsHtml(r.sections) +
         ((r.mealIdeas || []).length ? `<h4>This turns into</h4><div class="sg-meta">${r.mealIdeas.map((m) => `<span class="pill">${esc(m)}</span>`).join("")}</div>` : "") +
         `</div>`;
-      $$("#shopResult .shop-item input").forEach((c) => c.addEventListener("change", () => c.closest(".shop-item").classList.toggle("checked", c.checked)));
+      wireShopChecks(box);
+    } catch (e) { fstatus(null); handleErr(e); }
+  }
+
+  /* ---------- meal plan on demand: recipes + one combined list, any day ---------- */
+  async function runMealPlan() {
+    if (!ensureReady()) return;
+    const ask = $("#craveInput").value.trim() || "plan my next ~4 days of eating";
+    $("#suggestResult").innerHTML = "";
+    fstatus(`<span class="spinner"></span><span class="pulse">Planning your next few days…</span>`);
+    try {
+      const r = await Brain.mealPlan(ask);
+      fstatus(null);
+      const box = $("#suggestResult");
+      box.innerHTML = `<div class="sugg-intro">${esc(r.intro)}</div>`;
+      (r.recipes || []).forEach((s) => box.appendChild(suggCard(s)));
+      const wrap = document.createElement("div");
+      wrap.className = "shop-card";
+      wrap.innerHTML =
+        `<h4 style="margin-top:0">How to run it</h4><div class="sg-prepnote">${esc(r.eatingPlan)}</div>` +
+        `<h4>One trip buys it all</h4>` + shopSectionsHtml(r.groceries);
+      box.appendChild(wrap);
+      wireShopChecks(wrap);
     } catch (e) { fstatus(null); handleErr(e); }
   }
 
@@ -1344,11 +1527,16 @@
     $("#mealInput").addEventListener("keydown", (e) => { if (e.key === "Enter") analyzeMealFlow(null); });
     $("#cravingChips").addEventListener("click", (e) => { const c = e.target.closest(".chip"); if (!c) return; $("#craveInput").value = c.dataset.crave; runSuggest(c.dataset.crave); });
     $("#craveGo").addEventListener("click", () => runSuggest($("#craveInput").value.trim()));
+    $("#planGo").addEventListener("click", runMealPlan);
     $("#craveInput").addEventListener("keydown", (e) => { if (e.key === "Enter") runSuggest($("#craveInput").value.trim()); });
     $("#shopGo").addEventListener("click", runShop);
     $("#shopInput").addEventListener("keydown", (e) => { if (e.key === "Enter") runShop(); });
 
     // chat
+    // voice on every field that takes words
+    ["#exInput", "#addExInput", "#mealInput", "#craveInput", "#shopInput", "#chatInput",
+      "#meNotes", "#meFood", "#meEquip", "#meKnown", "#meDossier"].forEach((sel) => attachMic($(sel)));
+
     $("#chatSend").addEventListener("click", sendChat);
     $("#chatInput").addEventListener("keydown", (e) => { if (e.key === "Enter") sendChat(); });
 
@@ -1391,6 +1579,21 @@
       });
       p.dossier = $("#meDossier").value.trim();
       S().recCache = null; Store.save(); toast("Saved — the coach knows");
+    });
+    $("#logDexa").addEventListener("click", () => {
+      const scan = {
+        date: $("#meDexaDate").value || Store.vanToday(),
+        bodyFatPct: parseFloat($("#meBF").value) || null,
+        leanMassLb: parseFloat($("#meLean").value) || null,
+        fatMassLb: parseFloat($("#meFatM").value) || null,
+        rmrKcal: parseFloat($("#meRMR").value) || null,
+        weightLb: S().profile.weightLb || null,
+      };
+      if (scan.bodyFatPct == null && scan.leanMassLb == null) { toast("Enter the scan numbers above first"); return; }
+      Store.addDexaScan(scan);
+      S().recCache = null; S().briefCache = null; Store.save();
+      renderMe(); Backup.auto("dexa");
+      toast(`DEXA ${scan.date} logged — recomp truth updated 📊`);
     });
     $("#saveKey").addEventListener("click", () => { S().settings.apiKey = $("#meKey").value.trim(); S().settings.model = $("#meModel").value; Store.save(); renderToday(); toast("Saved"); });
 

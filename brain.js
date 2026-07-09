@@ -106,13 +106,7 @@ const Brain = (function () {
     properties: { calories: { type: "integer" }, protein: { type: "integer" }, carbs: { type: "integer" }, fat: { type: "integer" }, rationale: { type: "string" } },
     required: ["calories", "protein", "carbs", "fat", "rationale"], additionalProperties: false,
   };
-  const SUGGEST_SCHEMA = {
-    type: "object",
-    properties: {
-      intro: { type: "string", description: "One punchy line responding to what they asked for." },
-      suggestions: {
-        type: "array",
-        items: {
+  const RECIPE_ITEM = {
           type: "object",
           properties: {
             name: { type: "string" },
@@ -127,8 +121,12 @@ const Brain = (function () {
           },
           required: ["name", "hook", "servings", "perServing", "prepMinutes", "keepsDays", "ingredients", "steps", "prepNote"],
           additionalProperties: false,
-        },
-      },
+  };
+  const SUGGEST_SCHEMA = {
+    type: "object",
+    properties: {
+      intro: { type: "string", description: "One punchy line responding to what they asked for." },
+      suggestions: { type: "array", items: RECIPE_ITEM },
     },
     required: ["intro", "suggestions"], additionalProperties: false,
   };
@@ -140,6 +138,23 @@ const Brain = (function () {
       mealIdeas: { type: "array", items: { type: "string" }, description: "3-5 meals this haul can turn into." },
     },
     required: ["intro", "sections", "mealIdeas"], additionalProperties: false,
+  };
+  const MEALPLAN_SCHEMA = {
+    type: "object",
+    properties: {
+      intro: { type: "string", description: "One punchy line framing the plan." },
+      recipes: { type: "array", items: RECIPE_ITEM, description: "2-4 meal-prep recipes that together cover the coming days." },
+      eatingPlan: { type: "string", description: "2-4 sentences: how to eat these across the days — what pairs with what, rough daily shape, where snacks fit vs the targets." },
+      groceries: { type: "array", items: { type: "object", properties: { title: { type: "string" }, items: { type: "array", items: { type: "object", properties: { item: { type: "string" }, note: { type: "string" } }, required: ["item", "note"], additionalProperties: false } } }, required: ["title", "items"], additionalProperties: false }, description: "ONE combined shopping list for all recipes, by store section." },
+    },
+    required: ["intro", "recipes", "eatingPlan", "groceries"], additionalProperties: false,
+  };
+  const BRIEF_SCHEMA = {
+    type: "object",
+    properties: {
+      brief: { type: "string", description: "The morning brief: 3-5 punchy sentences, no lists, no headers." },
+    },
+    required: ["brief"], additionalProperties: false,
   };
 
   const DEBRIEF_SCHEMA = {
@@ -244,7 +259,9 @@ const Brain = (function () {
   const REVIEW_SYSTEM = CORE + "\n\n" +
     "TASK: the WEEKLY DEEP REVIEW — your Sunday coach's analysis. Think hard. Cover:\n" +
     "1. RECOMP ADJUDICATION: bodyweight trend vs strength trend — now WITH the logged intake data (nutrition.last7d vs " +
-    "targets). Falling weight + rising lifts = on track. Falling fast + sliding lifts = too aggressive. Flat everything: " +
+    "targets). When context.dexaHistory has more than one scan, the DEXA deltas (lean mass up? fat mass down?) are the " +
+    "gold standard — adjudicate against them over scale-weight inference, and note the next scan is due monthly. " +
+    "Falling weight + rising lifts = on track. Falling fast + sliding lifts = too aggressive. Flat everything: " +
     "check intake first — if they're logging over target, the diet is the problem, not the training. Also issue " +
     "nutritionCall: next week's calorie/protein/carb/fat targets, adjusted from the real intake + trend data (protein " +
     "~0.8-1g/lb; move calories in 100-200 steps).\n" +
@@ -287,6 +304,22 @@ const Brain = (function () {
     "proteins, produce, carbs/pantry, dairy, flavor-makers (sauces/spices — the difference between boring and " +
     "delicious), smart snacks. Note why each item earns its place. Then 3-5 meals the haul turns into. Fit the " +
     "week's targets and their foodNotes; account for savedRecipes they already rotate.";
+
+  const MEALPLAN_SYSTEM = CORE + "\n\n" + FOOD_CORE + "\n\n" +
+    "TASK: the athlete wants his next few days of eating planned — RIGHT NOW, whenever he asks, not on any fixed day. " +
+    "Build 2-4 meal-prep recipes (3-4 servings each, fridge-stable) that TOGETHER cover roughly the number of days he " +
+    "asked for (default ~4 days if unspecified), hit his daily calorie/protein targets when combined with reasonable " +
+    "snacks, and maximize variety against recentMealNames and savedRecipes. Then eatingPlan: exactly how to run the days " +
+    "(what pairs with what, daily shape vs targets). Then ONE combined grocery list for everything, by store section. " +
+    "Every recipe must make him hungry — this is the deliciousness engine at full power.";
+
+  const BRIEF_SYSTEM = CORE + "\n\n" +
+    "TASK: the athlete just opened the app for the first time today. Write his MORNING BRIEF: one tight paragraph " +
+    "(3-5 sentences, no lists) that fuses everything into marching orders. Priority order: (1) pins due or missed today " +
+    "(context.cycle), (2) what to train today and why (ledger gaps, freshness, days since last session — or call the rest " +
+    "day), (3) nutrition pace (protein/calories vs target, yesterday's intake if notable), (4) one sharp observation from " +
+    "the data (trend, PR proximity, steady-state milestone, weigh-in streak). Address him directly, be specific with " +
+    "numbers, zero filler. If it's afternoon/evening, adapt the framing to the time left in the day.";
 
   const CRITIQUE_SYSTEM =
     "You are a second, adversarial hypertrophy coach reviewing a colleague's weekly plan for a recomp athlete. You get " +
@@ -448,6 +481,17 @@ const Brain = (function () {
     return call({ model, max_tokens: 8000, system: GROCERY_SYSTEM, messages: [{ role: "user", content: `Store/situation: ${where}\n` + jsonBlock({ context: ctx() }) }], output_config: { format: { type: "json_schema", schema: GROCERY_SCHEMA } } }, key);
   }
 
+  // ask: how many days / any preferences — plans meals + one combined grocery list, any day of the week
+  async function mealPlan(ask) {
+    const { key, model } = auth();
+    return call({ model, max_tokens: 14000, system: MEALPLAN_SYSTEM, messages: [{ role: "user", content: `Plan request: ${ask || "plan my next ~4 days"}\n` + jsonBlock({ context: ctx() }) }], output_config: { format: { type: "json_schema", schema: MEALPLAN_SCHEMA } } }, key);
+  }
+
+  async function morningBrief() {
+    const { key, model } = auth();
+    return call({ model, max_tokens: 1200, system: BRIEF_SYSTEM, messages: [{ role: "user", content: "Morning brief.\n" + jsonBlock({ context: ctx() }) }], output_config: { format: { type: "json_schema", schema: BRIEF_SCHEMA } } }, key);
+  }
+
   async function photoAudit(photos) {
     const { key, model } = auth();
     const content = [];
@@ -456,7 +500,7 @@ const Brain = (function () {
     return call({ model, max_tokens: 2000, system: AUDIT_SYSTEM, messages: [{ role: "user", content }], output_config: { format: { type: "json_schema", schema: AUDIT_SCHEMA } } }, key);
   }
 
-  return { coach, plan, dailyFocus, weeklyReview, chat, debrief, photoAudit, analyzeMeal, nutritionTargets, suggestMeals, groceryList };
+  return { coach, plan, dailyFocus, weeklyReview, chat, debrief, photoAudit, analyzeMeal, nutritionTargets, suggestMeals, groceryList, mealPlan, morningBrief };
 })();
 
 if (typeof window !== "undefined") window.Brain = Brain;

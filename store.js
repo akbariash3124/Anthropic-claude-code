@@ -44,6 +44,8 @@ const Store = (function () {
     photos: [],       // {id,date,dataUrl} — downscaled, capped
     compounds: [],    // {id,name,mgPerWeek,intervalDays,startDate,halfLifeDays,active}
     pins: [],         // injection log: {id,date(YYYY-MM-DD local),compoundId,mg}
+    dexaScans: [],    // monthly scans: {id,date,bodyFatPct,leanMassLb,fatMassLb,rmrKcal,weightLb}
+    briefCache: null, // {date, brief} — morning brief, once per local day
 
     // Program state
     block: { phase: "accumulation", weekNum: 1, startedAt: null, targets: {}, specialization: [], experiment: "" },
@@ -129,6 +131,9 @@ const Store = (function () {
     }
     if (!(s.compounds || []).length && B.compounds) s.compounds = JSON.parse(JSON.stringify(B.compounds));
     if (!(s.pins || []).length && B.pins) s.pins = JSON.parse(JSON.stringify(B.pins));
+    if (!(s.dexaScans || []).length && B.stats && B.stats.bodyFatPct != null) {
+      s.dexaScans = [{ id: "bk-dexa1", date: B.stats.dexaDate || B.asOf, bodyFatPct: B.stats.bodyFatPct, leanMassLb: B.stats.leanMassLb, fatMassLb: B.stats.fatMassLb, rmrKcal: B.stats.rmrKcal, weightLb: bp.weightLb || null }];
+    }
     // the dossier IS the onboarding — never make the owner re-enter himself
     if (p.sex && p.weightLb && p.goalNotes) s.onboarded = true;
     s.bakedVersion = B.version;
@@ -161,6 +166,25 @@ const Store = (function () {
     const d = date || vanToday();
     state.pins = state.pins.filter((p) => !(p.compoundId === compoundId && p.date === d)); save();
   }
+
+  /* ---------- DEXA history (monthly scans — the recomp gold standard) ---------- */
+  function addDexaScan(scan) {
+    scan.id = uid(); scan.date = scan.date || vanToday();
+    state.dexaScans = (state.dexaScans || []).filter((x) => x.date !== scan.date);
+    state.dexaScans.push(scan);
+    state.dexaScans.sort((a, b) => (a.date < b.date ? -1 : 1));
+    // newest scan becomes the live stats the brain anchors to
+    Object.assign(state.profile.stats, {
+      bodyFatPct: scan.bodyFatPct ?? state.profile.stats.bodyFatPct,
+      leanMassLb: scan.leanMassLb ?? state.profile.stats.leanMassLb,
+      fatMassLb: scan.fatMassLb ?? state.profile.stats.fatMassLb,
+      rmrKcal: scan.rmrKcal ?? state.profile.stats.rmrKcal,
+      dexaDate: scan.date,
+    });
+    save();
+  }
+  function setBrief(brief) { state.briefCache = { date: vanToday(), brief }; save(); }
+  function todayBrief() { return state.briefCache && state.briefCache.date === vanToday() ? state.briefCache.brief : null; }
   function setReadiness(readiness) {
     const d = today();
     let c = state.checkIns.find((x) => x.date === d);
@@ -277,7 +301,7 @@ const Store = (function () {
   function reset() { const key = state.settings.apiKey; state = blank(); state.settings.apiKey = key; save(); }
 
   return {
-    get, save, uid, today, vanToday, logPin, unlogPin,
+    get, save, uid, today, vanToday, logPin, unlogPin, addDexaScan, setBrief, todayBrief,
     setNutritionTargets, addMeal, deleteMeal, mealsToday, addRecipe, deleteRecipe,
     addSession, addCardio, addWeighIn, todayWeighIn, setReadiness, todayCheckIn,
     addNiggle, cycleNiggle, addPhoto,
