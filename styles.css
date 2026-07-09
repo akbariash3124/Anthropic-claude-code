@@ -411,6 +411,28 @@ textarea { background: var(--bg); border: 1px solid var(--line); color: var(--te
 .nutri-line b { font-variant-numeric: tabular-nums; }
 .nutri-line .nl-go { color: var(--accent); font-weight: 800; }
 
+/* voice input */
+.micbtn { flex-shrink: 0; width: 42px; height: 42px; border-radius: 11px; background: var(--card2); border: 1px solid var(--line); font-size: 17px; cursor: pointer; }
+.micbtn.listening { background: #e5484d; border-color: #e5484d; animation: micpulse 1s infinite; }
+@keyframes micpulse { 50% { opacity: .55; } }
+label.field .micbtn { align-self: flex-end; margin-top: 6px; width: 44px; height: 36px; }
+.setgroup-label .micbtn, .micbtn.vset { width: 28px; height: 28px; font-size: 13px; border-radius: 8px; margin-left: 6px; vertical-align: middle; }
+.chatbar .micbtn { height: 44px; }
+
+/* live copilot */
+.copilot-note { font-size: 12.5px; color: var(--accent); margin-top: 6px; min-height: 0; }
+.copilot-note:empty { display: none; }
+.setrow.copilot-flash { animation: cflash 1.2s; }
+@keyframes cflash { 0% { background: rgba(51, 214, 192, .22); } 100% { background: transparent; } }
+
+/* morning brief */
+.brief-text { margin: 8px 0 0; font-size: 14px; line-height: 1.55; }
+
+/* backup setup steps */
+.setup-steps { margin: 0 0 14px 18px; padding: 0; font-size: 13px; color: var(--muted); display: flex; flex-direction: column; gap: 9px; line-height: 1.5; }
+.setup-steps a { color: var(--accent); font-weight: 700; text-decoration: none; }
+.setup-steps b { color: var(--text); }
+
 /* cycle / pin tracker */
 .cycle-card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; margin-bottom: 14px; }
 .cycle-card .dc-label { margin-bottom: 6px; }

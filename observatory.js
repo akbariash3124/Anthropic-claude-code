@@ -301,6 +301,7 @@ const Obs = (function () {
       profile: state.profile,
       dossier: (typeof window !== "undefined" && window.BAKED && window.BAKED.dossier) || "",
       cycle: cycleStatus(state),
+      dexaHistory: state.dexaScans || [],
       dietPhase: state.dietPhase,
       block: state.block,
       readinessToday: ci ? ci.readiness : null,
