@@ -411,6 +411,15 @@ textarea { background: var(--bg); border: 1px solid var(--line); color: var(--te
 .nutri-line b { font-variant-numeric: tabular-nums; }
 .nutri-line .nl-go { color: var(--accent); font-weight: 800; }
 
+/* cycle / pin tracker */
+.cycle-card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; margin-bottom: 14px; }
+.cycle-card .dc-label { margin-bottom: 6px; }
+.cycle-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 0; }
+.cycle-row + .cycle-row { border-top: 1px solid var(--line); }
+.cycle-row .cycle-info { min-width: 0; font-size: 13.5px; }
+.cycle-row .chip { flex-shrink: 0; }
+.cycle-missed { color: #ffb020; font-weight: 700; }
+
 /* week summary */
 .weeksum { display: flex; align-items: center; gap: 16px; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; margin-bottom: 12px; }
 .weeksum > div { display: flex; flex-direction: column; }

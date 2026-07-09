@@ -51,6 +51,7 @@
         </div>
       </div>
 
+      <div id="cycleCard" class="cycle-card hidden"></div>
       <div id="nutriLine" class="nutri-line hidden"></div>
       <div id="backupNudge" class="keybanner hidden"></div>
       <div id="reviewBanner" class="review-banner hidden"></div>
@@ -222,6 +223,11 @@
         <div id="weightChart"></div>
       </div>
 
+      <div class="panel" id="cyclePanel">
+        <div class="panel-head"><h2>Compound levels</h2><span class="muted-sm">estimated, from your pin log</span></div>
+        <div id="cycleChart"></div>
+      </div>
+
       <div class="panel">
         <div class="panel-head"><h2>Niggles</h2><button class="mini-btn" id="niggleAdd">＋ Add</button></div>
         <div id="niggleList"></div>
@@ -269,6 +275,21 @@
         <label class="field"><span>Gym equipment notes (optional)</span><input type="text" id="meEquip" placeholder="dumbbells to 100 in 5s, no safety squat bar…" /></label>
         <label class="field"><span>Lifts you know (optional)</span><input type="text" id="meKnown" placeholder="bench 185x8, squat 225x5" /></label>
         <button id="saveMe" class="cta small">Save</button>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><h2>Body scan &amp; metabolism</h2><span class="muted-sm" id="dexaDate"></span></div>
+        <p class="fineprint">Measured numbers beat formulas — the coach anchors protein to lean mass and calories to your measured RMR.</p>
+        <div class="row">
+          <label class="field"><span>Body fat %</span><input type="number" id="meBF" step="0.1" min="0" /></label>
+          <label class="field"><span>Lean mass (lb)</span><input type="number" id="meLean" step="0.1" min="0" /></label>
+        </div>
+        <div class="row">
+          <label class="field"><span>Fat mass (lb)</span><input type="number" id="meFatM" step="0.01" min="0" /></label>
+          <label class="field"><span>RMR (kcal/day)</span><input type="number" id="meRMR" step="10" min="0" /></label>
+        </div>
+        <label class="field"><span>Permanent notes for the coach</span><textarea id="meDossier" rows="3" placeholder="Paste anything the coach should know forever — full DEXA report, bloodwork, injuries…"></textarea></label>
+        <button id="saveDexa" class="cta small">Save</button>
       </div>
 
       <div class="panel">
@@ -332,6 +353,7 @@
   <div id="toast" class="toast hidden"></div>
 
   <script src="config.js"></script>
+  <script src="baked.js"></script>
   <script src="store.js"></script>
   <script src="observatory.js"></script>
   <script src="brain.js"></script>
