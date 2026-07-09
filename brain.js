@@ -307,9 +307,15 @@ const Brain = (function () {
     }
     const data = await res.json();
     if (data.stop_reason === "refusal") throw new Error("The coach declined this request.");
-    const text = (data.content || []).find((b) => b.type === "text");
+    const text = (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("");
     if (!text) throw new Error("Empty response from the coach.");
-    try { return JSON.parse(text.text); } catch { throw new Error("Could not read the coach's response."); }
+    try { return JSON.parse(text); } catch {
+      // salvage: some responses wrap or trail the JSON
+      const m = text.match(/\{[\s\S]*\}/);
+      if (m) { try { return JSON.parse(m[0]); } catch {} }
+      if (data.stop_reason === "max_tokens") throw new Error("The response got cut off — tap again and it'll retry.");
+      throw new Error("Could not read the coach's response — try again.");
+    }
   }
   function parseDataUrl(u) { const m = /^data:([^;]+);base64,(.+)$/.exec(u || ""); return m ? { mediaType: m[1], data: m[2] } : null; }
   const jsonBlock = (o) => "```json\n" + JSON.stringify(o, null, 1) + "\n```";
@@ -341,18 +347,18 @@ const Brain = (function () {
     const img = opts.imageDataUrl && parseDataUrl(opts.imageDataUrl);
     if (img) content.push({ type: "image", source: { type: "base64", media_type: img.mediaType, data: img.data } });
     content.push({ type: "text", text: (img ? "Identify the exercise/machine in the photo, then prescribe today's sets.\n" : "Prescribe today's sets.\n") + jsonBlock(payload) });
-    return call({ model, max_tokens: 1500, system: COACH_SYSTEM, messages: [{ role: "user", content }], output_config: { format: { type: "json_schema", schema: COACH_SCHEMA } } }, key);
+    return call({ model, max_tokens: 4000, system: COACH_SYSTEM, messages: [{ role: "user", content }], output_config: { format: { type: "json_schema", schema: COACH_SCHEMA } } }, key);
   }
 
   async function plan(opts) {
     const { key, model } = auth();
     const payload = { context: ctx(), focus: opts.focus, timeboxMinutes: opts.timeboxMinutes || null };
-    return call({ model, max_tokens: 3500, system: PLAN_SYSTEM, messages: [{ role: "user", content: "Build the session.\n" + jsonBlock(payload) }], output_config: { format: { type: "json_schema", schema: PLAN_SCHEMA } } }, key);
+    return call({ model, max_tokens: 10000, system: PLAN_SYSTEM, messages: [{ role: "user", content: "Build the session.\n" + jsonBlock(payload) }], output_config: { format: { type: "json_schema", schema: PLAN_SCHEMA } } }, key);
   }
 
   async function dailyFocus() {
     const { key, model } = auth();
-    return call({ model, max_tokens: 1200, system: FOCUS_SYSTEM, messages: [{ role: "user", content: "What do I train today?\n" + jsonBlock({ context: ctx() }) }], output_config: { format: { type: "json_schema", schema: FOCUS_SCHEMA } } }, key);
+    return call({ model, max_tokens: 3000, system: FOCUS_SYSTEM, messages: [{ role: "user", content: "What do I train today?\n" + jsonBlock({ context: ctx() }) }], output_config: { format: { type: "json_schema", schema: FOCUS_SCHEMA } } }, key);
   }
 
   // Weekly deep review: draft with extended thinking, then adversarial critique -> final.
@@ -361,7 +367,7 @@ const Brain = (function () {
     const context = ctx();
     if (onStage) onStage("Analyzing your week — deep think…");
     const draft = await call({
-      model, max_tokens: 12000,
+      model, max_tokens: 16000,
       thinking: { type: "adaptive" },
       system: REVIEW_SYSTEM,
       messages: [{ role: "user", content: "Run my weekly review.\n" + jsonBlock({ context }) }],
@@ -370,7 +376,7 @@ const Brain = (function () {
     if (onStage) onStage("Adversarial pass — attacking the plan…");
     try {
       return await call({
-        model, max_tokens: 12000,
+        model, max_tokens: 16000,
         thinking: { type: "adaptive" },
         system: CRITIQUE_SYSTEM,
         messages: [{ role: "user", content: "Data:\n" + jsonBlock({ context }) + "\n\nColleague's draft review:\n" + jsonBlock(draft) + "\n\nOutput the final review." }],
@@ -385,7 +391,7 @@ const Brain = (function () {
     const messages = [{ role: "user", content: "My current data:\n" + jsonBlock({ context: ctx() }) }, { role: "assistant", content: "Got it — I have your full current picture. What's up?" }]
       .concat(history)
       .concat([{ role: "user", content: userText }]);
-    const body = { model, max_tokens: 1200, system: CHAT_SYSTEM, messages };
+    const body = { model, max_tokens: 2500, system: CHAT_SYSTEM, messages };
     const res = await fetch(API_URL, { method: "POST", headers: headers(key), body: JSON.stringify(body) });
     if (!res.ok) { let d = ""; try { d = (await res.json()).error?.message || ""; } catch {} const e = new Error(d || `Request failed (${res.status})`); e.status = res.status; throw e; }
     const data = await res.json();
@@ -397,7 +403,7 @@ const Brain = (function () {
 
   async function debrief(sessionSummary) {
     const { key, model } = auth();
-    return call({ model, max_tokens: 700, system: DEBRIEF_SYSTEM, messages: [{ role: "user", content: "Session just logged:\n" + jsonBlock(sessionSummary) + "\nContext:\n" + jsonBlock({ context: ctx() }) }], output_config: { format: { type: "json_schema", schema: DEBRIEF_SCHEMA } } }, key);
+    return call({ model, max_tokens: 1500, system: DEBRIEF_SYSTEM, messages: [{ role: "user", content: "Session just logged:\n" + jsonBlock(sessionSummary) + "\nContext:\n" + jsonBlock({ context: ctx() }) }], output_config: { format: { type: "json_schema", schema: DEBRIEF_SCHEMA } } }, key);
   }
 
   // Photo and/or text meal -> macro estimate. Pass {correction, prior} to re-estimate.
@@ -408,23 +414,23 @@ const Brain = (function () {
     if (img) content.push({ type: "image", source: { type: "base64", media_type: img.mediaType, data: img.data } });
     const payload = { description: opts.text || null, userCorrection: opts.correction || null, priorEstimate: opts.prior || null, context: { foodNotes: Store.get().profile.foodNotes || null } };
     content.push({ type: "text", text: (img ? "Estimate the nutrition of the meal in this photo.\n" : "Estimate the nutrition of this meal.\n") + jsonBlock(payload) });
-    return call({ model, max_tokens: 900, system: MEAL_SYSTEM, messages: [{ role: "user", content }], output_config: { format: { type: "json_schema", schema: MEAL_SCHEMA } } }, key);
+    return call({ model, max_tokens: 2500, system: MEAL_SYSTEM, messages: [{ role: "user", content }], output_config: { format: { type: "json_schema", schema: MEAL_SCHEMA } } }, key);
   }
 
   async function nutritionTargets() {
     const { key, model } = auth();
-    return call({ model, max_tokens: 500, system: TARGETS_SYSTEM, messages: [{ role: "user", content: "Set my daily targets.\n" + jsonBlock({ context: ctx() }) }], output_config: { format: { type: "json_schema", schema: TARGETS_SCHEMA } } }, key);
+    return call({ model, max_tokens: 1000, system: TARGETS_SYSTEM, messages: [{ role: "user", content: "Set my daily targets.\n" + jsonBlock({ context: ctx() }) }], output_config: { format: { type: "json_schema", schema: TARGETS_SCHEMA } } }, key);
   }
 
   // ask: craving / situation / "surprise me"
   async function suggestMeals(ask) {
     const { key, model } = auth();
-    return call({ model, max_tokens: 3500, system: SUGGEST_SYSTEM, messages: [{ role: "user", content: `What I want: ${ask}\n` + jsonBlock({ context: ctx() }) }], output_config: { format: { type: "json_schema", schema: SUGGEST_SCHEMA } } }, key);
+    return call({ model, max_tokens: 10000, system: SUGGEST_SYSTEM, messages: [{ role: "user", content: `What I want: ${ask}\n` + jsonBlock({ context: ctx() }) }], output_config: { format: { type: "json_schema", schema: SUGGEST_SCHEMA } } }, key);
   }
 
   async function groceryList(where) {
     const { key, model } = auth();
-    return call({ model, max_tokens: 2000, system: GROCERY_SYSTEM, messages: [{ role: "user", content: `Store/situation: ${where}\n` + jsonBlock({ context: ctx() }) }], output_config: { format: { type: "json_schema", schema: GROCERY_SCHEMA } } }, key);
+    return call({ model, max_tokens: 8000, system: GROCERY_SYSTEM, messages: [{ role: "user", content: `Store/situation: ${where}\n` + jsonBlock({ context: ctx() }) }], output_config: { format: { type: "json_schema", schema: GROCERY_SCHEMA } } }, key);
   }
 
   async function photoAudit(photos) {
@@ -432,7 +438,7 @@ const Brain = (function () {
     const content = [];
     photos.forEach((p) => { const img = parseDataUrl(p.dataUrl); if (img) content.push({ type: "image", source: { type: "base64", media_type: img.mediaType, data: img.data } }); });
     content.push({ type: "text", text: `Photos oldest→newest, dates: ${photos.map((p) => p.date).join(", ")}. Audit my physique trend.\n` + jsonBlock({ context: ctx() }) });
-    return call({ model, max_tokens: 900, system: AUDIT_SYSTEM, messages: [{ role: "user", content }], output_config: { format: { type: "json_schema", schema: AUDIT_SCHEMA } } }, key);
+    return call({ model, max_tokens: 2000, system: AUDIT_SYSTEM, messages: [{ role: "user", content }], output_config: { format: { type: "json_schema", schema: AUDIT_SCHEMA } } }, key);
   }
 
   return { coach, plan, dailyFocus, weeklyReview, chat, debrief, photoAudit, analyzeMeal, nutritionTargets, suggestMeals, groceryList };

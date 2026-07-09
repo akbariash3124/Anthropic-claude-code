@@ -1,6 +1,6 @@
 /* Service worker — app shell works offline (logging, timer, plate math).
    AI + backup calls are network-only. Bump CACHE to ship updates. */
-const CACHE = "coach-shell-v3";
+const CACHE = "coach-shell-v4";
 const ASSETS = [
   "./", "./index.html", "./styles.css", "./manifest.webmanifest",
   "./config.js", "./store.js", "./observatory.js", "./brain.js", "./backup.js", "./app.js",
