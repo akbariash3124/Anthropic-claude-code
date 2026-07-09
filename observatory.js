@@ -175,6 +175,28 @@ const Obs = (function () {
       .map((l) => ({ name: l.name, sessions: l.sessions, slope4wkLbPerWk: l.slope4wkLbPerWk, verdict: l.slope4wkLbPerWk == null ? "insufficient" : l.slope4wkLbPerWk > 1 ? "producing" : l.slope4wkLbPerWk > 0.2 ? "slow" : "flat" }));
   }
 
+  /* ---------- nutrition ---------- */
+  function nutritionSummary(state) {
+    const meals = state.meals || [];
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const sum = (list) => list.reduce((t, m) => ({ cal: t.cal + (m.calories || 0), p: t.p + (m.protein || 0), c: t.c + (m.carbs || 0), f: t.f + (m.fat || 0) }), { cal: 0, p: 0, c: 0, f: 0 });
+    const todayMeals = meals.filter((m) => m.date.slice(0, 10) === todayStr);
+    const t = sum(todayMeals);
+    // last 7 full days (excluding today), only days with logs
+    const byDay = {};
+    meals.forEach((m) => { const d = m.date.slice(0, 10); if (d !== todayStr && ageDays(m.date) <= 8) (byDay[d] = byDay[d] || []).push(m); });
+    const days = Object.keys(byDay);
+    const dayTotals = days.map((d) => sum(byDay[d]));
+    const avg = (k) => (dayTotals.length ? Math.round(dayTotals.reduce((a, b) => a + b[k], 0) / dayTotals.length) : null);
+    return {
+      targets: (state.nutrition && state.nutrition.targets) || null,
+      today: { calories: Math.round(t.cal), protein: Math.round(t.p), carbs: Math.round(t.c), fat: Math.round(t.f), mealsLogged: todayMeals.length },
+      last7d: { daysLogged: days.length, avgCalories: avg("cal"), avgProtein: avg("p") },
+      recentMealNames: meals.slice(-14).map((m) => m.name),
+      savedRecipes: (state.recipes || []).slice(0, 10).map((r) => r.name),
+    };
+  }
+
   /* ---------- THE DISTILLATION — context bundle for every AI call ---------- */
   function distill(state) {
     const ci = state.checkIns.find((x) => x.date === new Date().toISOString().slice(0, 10));
@@ -186,6 +208,7 @@ const Obs = (function () {
       readinessToday: ci ? ci.readiness : null,
       activeNiggles: state.niggles.filter((n) => n.status !== "resolved").map((n) => ({ area: n.area, note: n.note, status: n.status, since: n.created })),
       bodyweight: weightTrend(state),
+      nutrition: nutritionSummary(state),
       volume: { thisWeek: volumeThisWeek(state), lastWeek: volumeLastWeek(state), weeklyTargets: state.block.targets },
       muscleFreshness: muscleFreshness(state),
       lifts: liftSummaries(state, 10),
@@ -213,7 +236,7 @@ const Obs = (function () {
     volumeThisWeek, volumeLastWeek, muscleFreshness,
     liftSeries, liftSummaries, slopePerWeek, predictionMetrics,
     weightTrend, cardioSummary, adherence, exerciseROI,
-    distill,
+    nutritionSummary, distill,
   };
 })();
 

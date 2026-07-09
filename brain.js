@@ -77,6 +77,7 @@ const Brain = (function () {
       specialization: { type: "object", properties: { muscles: { type: "array", items: { type: "string" } }, note: { type: "string" } }, required: ["muscles", "note"], additionalProperties: false },
       experiment: { type: "object", properties: { status: { type: "string", enum: ["none", "start", "continue", "conclude"] }, description: { type: "string" }, finding: { type: "string" } }, required: ["status", "description", "finding"], additionalProperties: false },
       dietCall: { type: "object", properties: { mode: { type: "string", enum: ["hold_deficit", "tighten", "maintenance_break", "surplus_nudge"] }, note: { type: "string" } }, required: ["mode", "note"], additionalProperties: false },
+      nutritionCall: { type: "object", properties: { calories: { type: "integer" }, protein: { type: "integer" }, carbs: { type: "integer" }, fat: { type: "integer" }, note: { type: "string" } }, required: ["calories", "protein", "carbs", "fat", "note"], additionalProperties: false },
       cardioCall: { type: "object", properties: { weeklyMinutes: { type: "integer" }, note: { type: "string" } }, required: ["weeklyMinutes", "note"], additionalProperties: false },
       stalls: { type: "array", items: { type: "object", properties: { exercise: { type: "string" }, question: { type: "string" } }, required: ["exercise", "question"], additionalProperties: false } },
       exerciseCalls: { type: "array", items: { type: "object", properties: { exercise: { type: "string" }, call: { type: "string", enum: ["keep", "rotate_out", "watch"] }, note: { type: "string" } }, required: ["exercise", "call", "note"], additionalProperties: false } },
@@ -84,9 +85,62 @@ const Brain = (function () {
       weeklyRollup: { type: "string", description: "Compact 4-6 sentence factual summary of the week for long-term memory." },
       blockRollup: { type: "string", description: "Only when blockCall.action=new_block: compact summary of the finished block and its findings. Else empty string." },
     },
-    required: ["headline", "analysis", "recompVerdict", "muscleTargets", "blockCall", "specialization", "experiment", "dietCall", "cardioCall", "stalls", "exerciseCalls", "athleteModel", "weeklyRollup", "blockRollup"],
+    required: ["headline", "analysis", "recompVerdict", "muscleTargets", "blockCall", "specialization", "experiment", "dietCall", "nutritionCall", "cardioCall", "stalls", "exerciseCalls", "athleteModel", "weeklyRollup", "blockRollup"],
     additionalProperties: false,
   };
+  const MEAL_SCHEMA = {
+    type: "object",
+    properties: {
+      name: { type: "string", description: "Short meal name, e.g. 'Chicken burrito bowl'." },
+      items: { type: "array", items: { type: "object", properties: { name: { type: "string" }, calories: { type: "integer" }, protein: { type: "integer" }, carbs: { type: "integer" }, fat: { type: "integer" } }, required: ["name", "calories", "protein", "carbs", "fat"], additionalProperties: false } },
+      calories: { type: "integer" }, protein: { type: "integer" }, carbs: { type: "integer" }, fat: { type: "integer" },
+      confidence: { type: "string", enum: ["low", "medium", "high"] },
+      assumptions: { type: "string", description: "Key portion assumptions in one short line, e.g. 'assumed ~1.5 cups rice, 6oz chicken'." },
+    },
+    required: ["name", "items", "calories", "protein", "carbs", "fat", "confidence", "assumptions"],
+    additionalProperties: false,
+  };
+  const TARGETS_SCHEMA = {
+    type: "object",
+    properties: { calories: { type: "integer" }, protein: { type: "integer" }, carbs: { type: "integer" }, fat: { type: "integer" }, rationale: { type: "string" } },
+    required: ["calories", "protein", "carbs", "fat", "rationale"], additionalProperties: false,
+  };
+  const SUGGEST_SCHEMA = {
+    type: "object",
+    properties: {
+      intro: { type: "string", description: "One punchy line responding to what they asked for." },
+      suggestions: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            name: { type: "string" },
+            hook: { type: "string", description: "1-2 sentences selling WHY this is delicious — flavors, textures. Make them hungry." },
+            servings: { type: "integer" },
+            perServing: { type: "object", properties: { calories: { type: "integer" }, protein: { type: "integer" }, carbs: { type: "integer" }, fat: { type: "integer" } }, required: ["calories", "protein", "carbs", "fat"], additionalProperties: false },
+            prepMinutes: { type: "integer" },
+            keepsDays: { type: "integer", description: "Days it keeps in the fridge." },
+            ingredients: { type: "array", items: { type: "string" } },
+            steps: { type: "array", items: { type: "string" }, description: "Short, confident steps. No fluff." },
+            prepNote: { type: "string", description: "Storage/reheat/pack tip for eating it over several days." },
+          },
+          required: ["name", "hook", "servings", "perServing", "prepMinutes", "keepsDays", "ingredients", "steps", "prepNote"],
+          additionalProperties: false,
+        },
+      },
+    },
+    required: ["intro", "suggestions"], additionalProperties: false,
+  };
+  const GROCERY_SCHEMA = {
+    type: "object",
+    properties: {
+      intro: { type: "string" },
+      sections: { type: "array", items: { type: "object", properties: { title: { type: "string" }, items: { type: "array", items: { type: "object", properties: { item: { type: "string" }, note: { type: "string", description: "Why / what it's for, few words." } }, required: ["item", "note"], additionalProperties: false } } }, required: ["title", "items"], additionalProperties: false } },
+      mealIdeas: { type: "array", items: { type: "string" }, description: "3-5 meals this haul can turn into." },
+    },
+    required: ["intro", "sections", "mealIdeas"], additionalProperties: false,
+  };
+
   const DEBRIEF_SCHEMA = {
     type: "object",
     properties: {
@@ -118,7 +172,19 @@ const Brain = (function () {
     "consistently sandbag or overshoot, silently correct your targets. Respect fatigue curve when setting later sets. " +
     "Respect activeNiggles: never program into a flagged joint; prefer swaps and note it. During a deficit, protect " +
     "the key lifts; if dietPhase says deficit and lifts are sliding, bias volume down, intensity maintained. " +
-    "Deload week (block.phase=deload): everything light and crisp, RIR 3-4.";
+    "Deload week (block.phase=deload): everything light and crisp, RIR 3-4.\n\n" +
+    "NUTRITION CONTEXT: the context includes nutrition — AI-set targets, today's logged intake, 7-day averages and " +
+    "logging adherence, recent meals, and free-form foodNotes (likes/dislikes/allergies). Use it: if protein is behind " +
+    "today or intake is chronically under/over target, say so where relevant.";
+
+  const FOOD_CORE =
+    "You are also this athlete's nutrition coach, and your food philosophy is non-negotiable: DELICIOUS FIRST. " +
+    "Never suggest joyless bro-food (plain chicken-rice-broccoli, dry tilapia, sad salads). Every suggestion must be " +
+    "something a good cook would be excited to eat — bold flavors, sauces, texture contrast, real seasoning — that " +
+    "*happens* to hit the macros. Default format is MEAL PREP: 3-4 servings, fridge-stable for days, packable, " +
+    "reheats well. Respect foodNotes (likes/dislikes/allergies) religiously, use recentMealNames for variety, and fit " +
+    "suggestions to what's LEFT of today's targets and the recomp phase (deficit: high-protein, high-volume, " +
+    "satiating; maintenance: more room to play).";
 
   const COACH_SYSTEM = CORE + "\n\n" +
     "TASK: prescribe TODAY'S sets for one exercise (or identify it from a photo first). Rules:\n" +
@@ -148,8 +214,11 @@ const Brain = (function () {
 
   const REVIEW_SYSTEM = CORE + "\n\n" +
     "TASK: the WEEKLY DEEP REVIEW — your Sunday coach's analysis. Think hard. Cover:\n" +
-    "1. RECOMP ADJUDICATION: bodyweight trend vs strength trend. Falling weight + rising lifts = on track. Falling fast + " +
-    "sliding lifts = too aggressive (maintenance break / cut cardio). Flat everything = stalled (tighten). Be honest.\n" +
+    "1. RECOMP ADJUDICATION: bodyweight trend vs strength trend — now WITH the logged intake data (nutrition.last7d vs " +
+    "targets). Falling weight + rising lifts = on track. Falling fast + sliding lifts = too aggressive. Flat everything: " +
+    "check intake first — if they're logging over target, the diet is the problem, not the training. Also issue " +
+    "nutritionCall: next week's calorie/protein/carb/fat targets, adjusted from the real intake + trend data (protein " +
+    "~0.8-1g/lb; move calories in 100-200 steps).\n" +
     "2. VOLUME: per-muscle targets for next week from this week's ledger, response data, specialization, and recovery.\n" +
     "3. BLOCK: continue (increment weekNum), deload (fatigue signals: RIR drift, rep quality decay, 5+ weeks accumulating), " +
     "or new_block (after deload / experiment concluded).\n" +
@@ -162,6 +231,29 @@ const Brain = (function () {
     "9. weeklyRollup: compact factual memory of this week.\n" +
     "The analysis must cite actual numbers from the data. No generic advice.";
 
+  const MEAL_SYSTEM = CORE + "\n\n" +
+    "TASK: estimate the nutrition of a meal from a photo and/or description. Itemize what you see, estimate portions " +
+    "like an experienced nutrition coach (use plate/hand/container size cues), and total it. Be decisive — give your " +
+    "best single estimate, not ranges. State your key portion assumptions in one line. confidence: high (clear, " +
+    "standard foods), medium (some guessing), low (sauces/oils/hidden ingredients could swing it). If the user " +
+    "provides a correction to a prior estimate, re-estimate honoring their correction exactly.";
+
+  const TARGETS_SYSTEM = CORE + "\n\n" +
+    "TASK: set daily nutrition targets for this recomp athlete from their profile, bodyweight/trend, training load, " +
+    "and goal notes. Recomp defaults: moderate deficit (~300-500 below maintenance), protein ~0.8-1g per lb bodyweight, " +
+    "fat not below ~0.3g/lb, rest carbs. Round to clean numbers. Rationale: 1-2 sentences.";
+
+  const SUGGEST_SYSTEM = CORE + "\n\n" + FOOD_CORE + "\n\n" +
+    "TASK: the athlete tells you a craving, a situation, or just asks what to eat. Give 2-3 meal-prep suggestions " +
+    "(or 3-4 quick options if they clearly want a snack/single meal — then servings=1, keepsDays as appropriate). " +
+    "The hook must make them hungry. Steps are short and confident. Per-serving macros must be honest estimates.";
+
+  const GROCERY_SYSTEM = CORE + "\n\n" + FOOD_CORE + "\n\n" +
+    "TASK: the athlete is at (or heading to) a store. Build a focused shopping list organized by store section — " +
+    "proteins, produce, carbs/pantry, dairy, flavor-makers (sauces/spices — the difference between boring and " +
+    "delicious), smart snacks. Note why each item earns its place. Then 3-5 meals the haul turns into. Fit the " +
+    "week's targets and their foodNotes; account for savedRecipes they already rotate.";
+
   const CRITIQUE_SYSTEM =
     "You are a second, adversarial hypertrophy coach reviewing a colleague's weekly plan for a recomp athlete. You get " +
     "the same full data plus their draft review. ATTACK it: contradictions with the data, volume targets that ignore " +
@@ -169,10 +261,10 @@ const Brain = (function () {
     "generic. Then output the FINAL corrected review in the same structured format — keep what's right, fix what's wrong. " +
     "If the draft is sound, refine wording and ship it.";
 
-  const CHAT_SYSTEM = CORE + "\n\n" +
-    "TASK: free conversation with your athlete. Answer anything — swap requests, stall diagnosis, diet questions, " +
-    "soreness, technique. Reference their real numbers. Keep replies tight and useful (2-6 sentences unless they ask for " +
-    "depth). You are their coach, not a search engine.";
+  const CHAT_SYSTEM = CORE + "\n\n" + FOOD_CORE + "\n\n" +
+    "TASK: free conversation with your athlete. Answer anything — swap requests, stall diagnosis, food and diet " +
+    "questions, cravings, soreness, technique. Reference their real numbers. Keep replies tight and useful (2-6 " +
+    "sentences unless they ask for depth). You are their coach, not a search engine.";
 
   const DEBRIEF_SYSTEM = CORE + "\n\n" +
     "TASK: the athlete just finished and logged a session (provided). Give a sharp 2-3 sentence debrief: what the numbers " +
@@ -287,6 +379,33 @@ const Brain = (function () {
     return call({ model, max_tokens: 700, system: DEBRIEF_SYSTEM, messages: [{ role: "user", content: "Session just logged:\n" + jsonBlock(sessionSummary) + "\nContext:\n" + jsonBlock({ context: ctx() }) }], output_config: { format: { type: "json_schema", schema: DEBRIEF_SCHEMA } } }, key);
   }
 
+  // Photo and/or text meal -> macro estimate. Pass {correction, prior} to re-estimate.
+  async function analyzeMeal(opts) {
+    const { key, model } = auth();
+    const content = [];
+    const img = opts.imageDataUrl && parseDataUrl(opts.imageDataUrl);
+    if (img) content.push({ type: "image", source: { type: "base64", media_type: img.mediaType, data: img.data } });
+    const payload = { description: opts.text || null, userCorrection: opts.correction || null, priorEstimate: opts.prior || null, context: { foodNotes: Store.get().profile.foodNotes || null } };
+    content.push({ type: "text", text: (img ? "Estimate the nutrition of the meal in this photo.\n" : "Estimate the nutrition of this meal.\n") + jsonBlock(payload) });
+    return call({ model, max_tokens: 900, system: MEAL_SYSTEM, messages: [{ role: "user", content }], output_config: { format: { type: "json_schema", schema: MEAL_SCHEMA } } }, key);
+  }
+
+  async function nutritionTargets() {
+    const { key, model } = auth();
+    return call({ model, max_tokens: 500, system: TARGETS_SYSTEM, messages: [{ role: "user", content: "Set my daily targets.\n" + jsonBlock({ context: ctx() }) }], output_config: { format: { type: "json_schema", schema: TARGETS_SCHEMA } } }, key);
+  }
+
+  // ask: craving / situation / "surprise me"
+  async function suggestMeals(ask) {
+    const { key, model } = auth();
+    return call({ model, max_tokens: 3500, system: SUGGEST_SYSTEM, messages: [{ role: "user", content: `What I want: ${ask}\n` + jsonBlock({ context: ctx() }) }], output_config: { format: { type: "json_schema", schema: SUGGEST_SCHEMA } } }, key);
+  }
+
+  async function groceryList(where) {
+    const { key, model } = auth();
+    return call({ model, max_tokens: 2000, system: GROCERY_SYSTEM, messages: [{ role: "user", content: `Store/situation: ${where}\n` + jsonBlock({ context: ctx() }) }], output_config: { format: { type: "json_schema", schema: GROCERY_SCHEMA } } }, key);
+  }
+
   async function photoAudit(photos) {
     const { key, model } = auth();
     const content = [];
@@ -295,7 +414,7 @@ const Brain = (function () {
     return call({ model, max_tokens: 900, system: AUDIT_SYSTEM, messages: [{ role: "user", content }], output_config: { format: { type: "json_schema", schema: AUDIT_SCHEMA } } }, key);
   }
 
-  return { coach, plan, dailyFocus, weeklyReview, chat, debrief, photoAudit };
+  return { coach, plan, dailyFocus, weeklyReview, chat, debrief, photoAudit, analyzeMeal, nutritionTargets, suggestMeals, groceryList };
 })();
 
 if (typeof window !== "undefined") window.Brain = Brain;

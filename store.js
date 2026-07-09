@@ -20,11 +20,17 @@ const Store = (function () {
     profile: {
       sex: "", weightLb: null, heightCm: null, experience: "Beginner",
       goal: "Recomp (build muscle + lose fat)", goalNotes: "", known: "", proteinTarget: null, equipmentNotes: "",
+      foodNotes: "", // likes/dislikes/allergies/cuisines — feeds the meal engine
     },
     onboarded: false,
 
     // The coach's living notebook about the athlete (AI-written).
     athleteModel: { text: "", pendingNotes: [], updatedAt: null },
+
+    // Nutrition
+    nutrition: { targets: null }, // {calories,protein,carbs,fat,rationale,updatedAt,setBy}
+    meals: [],   // {id,date,name,desc,items:[{name,calories,protein,carbs,fat}],calories,protein,carbs,fat,confidence,method}
+    recipes: [], // saved meal-prep recipes: {id,name,hook,servings,perServing,prepMinutes,keepsDays,ingredients,steps,createdAt}
 
     // Logs
     sessions: [],     // lift sessions (see saveSession shape in app.js)
@@ -119,6 +125,22 @@ const Store = (function () {
   }
   function todayCheckIn() { return state.checkIns.find((x) => x.date === today()) || null; }
 
+  /* ---------- nutrition ---------- */
+  function setNutritionTargets(t, setBy) {
+    state.nutrition.targets = Object.assign({}, t, { updatedAt: new Date().toISOString(), setBy: setBy || "ai" });
+    save();
+  }
+  function addMeal(m) { m.id = uid(); m.date = m.date || new Date().toISOString(); state.meals.push(m); save(); return m; }
+  function deleteMeal(id) { state.meals = state.meals.filter((m) => m.id !== id); save(); }
+  function mealsToday() { const d = today(); return state.meals.filter((m) => m.date.slice(0, 10) === d); }
+  function addRecipe(r) {
+    const dup = state.recipes.find((x) => x.name.toLowerCase() === r.name.toLowerCase());
+    if (dup) return dup;
+    r.id = uid(); r.createdAt = new Date().toISOString();
+    state.recipes.unshift(r); state.recipes = state.recipes.slice(0, 20); save(); return r;
+  }
+  function deleteRecipe(id) { state.recipes = state.recipes.filter((r) => r.id !== id); save(); }
+
   /* ---------- niggles ---------- */
   function addNiggle(area, note) { const n = { id: uid(), area, note, status: "active", created: today(), updated: today() }; state.niggles.push(n); save(); return n; }
   function cycleNiggle(id) {
@@ -166,6 +188,9 @@ const Store = (function () {
     }
     if (data.specialization && data.specialization.muscles) state.block.specialization = data.specialization.muscles;
     if (data.experiment && data.experiment.description && data.experiment.status !== "none") state.block.experiment = data.experiment.description;
+    if (data.nutritionCall && data.nutritionCall.calories > 0) {
+      setNutritionTargets({ calories: data.nutritionCall.calories, protein: data.nutritionCall.protein, carbs: data.nutritionCall.carbs, fat: data.nutritionCall.fat, rationale: data.nutritionCall.note || "" }, "weekly-review");
+    }
     if (data.dietCall && data.dietCall.mode) {
       const map = { hold_deficit: "deficit", tighten: "deficit", maintenance_break: "maintenance", surplus_nudge: "maintenance" };
       const mode = map[data.dietCall.mode] || state.dietPhase.mode;
@@ -209,6 +234,7 @@ const Store = (function () {
 
   return {
     get, save, uid, today,
+    setNutritionTargets, addMeal, deleteMeal, mealsToday, addRecipe, deleteRecipe,
     addSession, addCardio, addWeighIn, todayWeighIn, setReadiness, todayCheckIn,
     addNiggle, cycleNiggle, addPhoto,
     appendModelNote, setAthleteModel,
