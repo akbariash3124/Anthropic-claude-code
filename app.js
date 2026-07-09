@@ -30,7 +30,7 @@
   const cmToFtIn = (cm) => cm ? { ft: Math.floor(cm / 2.54 / 12), in: Math.round((cm / 2.54) % 12) } : { ft: "", in: "" };
   const ftInToCm = (ft, i) => { const f = parseInt(ft, 10) || 0, n = parseInt(i, 10) || 0; return f || n ? Math.round((f * 12 + n) * 2.54) : null; };
   const hasKey = () => !!S().settings.apiKey;
-  const wUnit = (perHand) => (perHand ? "lb/hand" : "lb");
+  const unitOf = (x) => (x.unitLabel && x.unitLabel !== "lb") ? x.unitLabel : (x.perHand ? "lb/hand" : "lb");
 
   function handleErr(e) {
     setStatus(null);
@@ -347,17 +347,32 @@
       (rx.rationale ? `<div class="rationale">${esc(rx.rationale)}</div>` : "") +
       (cues ? `<div class="cues">${cues}</div>` : "") +
       (warm.length ? `<div class="setgroup-label">Warm-up</div>` + warm.map((s, i) => setRow(restoredOr(rows, true, i, s), i, true)).join("") : "") +
-      `<div class="setgroup-label">Working sets · ${wUnit(rx.perHand)}</div>` +
+      `<div class="setgroup-label">Working sets · ${esc(unitOf(rx))}</div>` +
       work.map((s, i) => setRow(restoredOr(rows, false, i, s), i, false, s)).join("") +
-      (rx.equipment === "barbell" ? `<button class="plates-btn" data-act="plates">🏋 plate math</button><div class="plates-line hidden"></div>` : "") +
+      (rx.equipment === "barbell" && unitOf(rx).startsWith("lb") ? `<button class="plates-btn" data-act="plates">🏋 plate math</button><div class="plates-line hidden"></div>` : "") +
+      (el._saved ? "" : eqSwapHtml(rx)) +
       `<button class="redial" data-act="feeler">🎯 Off? Mark done sets, re-dial the rest</button>` + feelerHint +
+      (el._saved ? "" :
+        `<div class="fixrow adj"><input type="text" class="adj-input" placeholder="tell the coach: 'set 1 too heavy' / 'machine is numbered 1–15'…" /><button class="adj-go" data-act="adjust">Apply</button></div>`) +
       `<div class="card-actions">` +
-      (el._saved ? `<div class="notice" style="width:100%">✓ Logged.</div>` : `<button class="cta small" data-act="save">Log this exercise</button><button class="regen" data-act="swap" title="Can't do this — swap it">🔁</button>`) +
+      (el._saved ? `<div class="notice" style="width:100%">✓ Logged.</div>` :
+        `<button class="cta small" data-act="save">Log this exercise</button>` +
+        `<button class="regen" data-act="swap" title="Can't do this — swap it">🔁</button>` +
+        `<button class="regen del" data-act="remove" title="Remove this exercise">✕</button>`) +
       `</div></div>`;
 
     el.addEventListener("click", onCardClick);
     el.addEventListener("input", persistActive);
     return el;
+  }
+
+  // Quick equipment conversion chips (no barbell in the gym? one tap).
+  function eqSwapHtml(rx) {
+    const options = [["barbell", "Barbell"], ["dumbbell", "Dumbbell"], ["cable", "Cable"], ["machine", "Machine"]]
+      .filter(([v]) => v !== rx.equipment);
+    if (!["barbell", "dumbbell", "cable", "machine", "kettlebell", "other"].includes(rx.equipment)) return "";
+    return `<div class="eqswap"><span>No ${esc(rx.equipment)}?</span>` +
+      options.slice(0, 3).map(([v, t]) => `<button class="chip" data-eq="${v}">${t}</button>`).join("") + `</div>`;
   }
 
   // "Last time" block — your actual recent numbers for this lift, on the card.
@@ -405,12 +420,65 @@
       persistActive();
       return;
     }
+    const eq = e.target.closest("[data-eq]");
+    if (eq) { convertEquipment(el, eq.dataset.eq); return; }
     const act = e.target.closest("[data-act]");
     if (!act) return;
     if (act.dataset.act === "save") saveCard(el);
     else if (act.dataset.act === "feeler") feelerDialIn(el);
     else if (act.dataset.act === "swap") swapCard(el);
+    else if (act.dataset.act === "adjust") adjustCard(el);
     else if (act.dataset.act === "plates") togglePlates(el);
+    else if (act.dataset.act === "remove") {
+      el.remove(); persistActive();
+      toast(`${el._rx.resolvedName} removed`);
+    }
+  }
+
+  /* ---------- equipment conversion ---------- */
+  async function convertEquipment(el, target) {
+    const rx = el._rx;
+    const chip = $(`[data-eq="${target}"]`, el); if (chip) { chip.textContent = "…"; chip.disabled = true; }
+    try {
+      const nrx = await Brain.coach({ exerciseName: rx.resolvedName, swapFor: { exercise: rx.resolvedName, reason: `no ${rx.equipment} available — give me the ${target} version of this same movement, loads re-derived for ${target}` } });
+      el.replaceWith(exerciseCard(nrx, { standalone: true, src: { name: nrx.resolvedName, image: null }, adapted: buildHistoryNote(nrx.resolvedName) }));
+      persistActive();
+      toast(`Switched to ${nrx.resolvedName}`);
+    } catch (e2) { if (chip) { chip.textContent = target[0].toUpperCase() + target.slice(1); chip.disabled = false; } handleErr(e2); }
+  }
+
+  /* ---------- per-exercise feedback -> re-prescription + coach memory ---------- */
+  async function adjustCard(el) {
+    const rx = el._rx;
+    const input = $(".adj-input", el);
+    const note = (input.value || "").trim();
+    if (!note) { toast("Type what's off — I'll fix it"); return; }
+    const rows = workRows(el);
+    const done = rows.filter((r) => r.classList.contains("done"));
+    const btn = $(".adj-go", el); btn.textContent = "…"; btn.disabled = true;
+    try {
+      const opts = {
+        exerciseName: rx.resolvedName, adjustNote: note,
+        currentPrescription: { workingSets: rx.workingSets, warmup: rx.warmup, unitLabel: rx.unitLabel || "lb", equipment: rx.equipment },
+      };
+      if (done.length) {
+        opts.completedSets = done.map(readRow).filter((s) => s.r > 0).map((s) => ({ weight: s.w, reps: s.r, rir: s.rir }));
+        opts.remainingCount = rows.length - done.length;
+      }
+      const nrx = await Brain.coach(opts);
+      let rowsState = null;
+      if (opts.completedSets) {
+        const doneRows = done.map(readRow);
+        const newRows = (nrx.workingSets || []).map((s) => ({ warm: false, w: s.weight, r: s.reps, rir: s.targetRIR != null ? s.targetRIR : 1, done: false }));
+        nrx.workingSets = doneRows.map((d) => ({ weight: d.w, reps: d.r, targetRIR: d.rir != null ? d.rir : 1 })).concat(nrx.workingSets || []);
+        rowsState = doneRows.map((d) => ({ warm: false, w: d.w, r: d.r, rir: d.rir, done: true })).concat(newRows);
+      }
+      el.replaceWith(exerciseCard(nrx, { standalone: true, src: { name: nrx.resolvedName, image: null }, adapted: true, rows: rowsState, doneCount: opts.completedSets ? opts.completedSets.length : 0 }));
+      persistActive();
+      // durable learning: equipment quirks and preferences go to the coach's notebook
+      Store.appendModelNote(`(athlete feedback on ${rx.resolvedName}) ${note}`);
+      toast("Adjusted — and I'll remember that");
+    } catch (e2) { btn.textContent = "Apply"; btn.disabled = false; handleErr(e2); }
   }
 
   /* ---------- plate math ---------- */
@@ -530,7 +598,7 @@
     Store.addSession({
       date: new Date().toISOString(), name: rx.resolvedName,
       muscles: rx.muscles || [], equipment: rx.equipment, perHand: rx.perHand,
-      prescribed: rx.workingSets || [], logged,
+      prescribed: rx.workingSets || [], logged, unitLabel: rx.unitLabel || "lb",
       estimatedOneRepMax: rx.estimatedOneRepMax || null, restSeconds: rx.restSeconds || null, rationale: rx.rationale || "",
     });
     el._saved = true;
@@ -851,11 +919,13 @@
     list.innerHTML = all.length ? weekSummary() + all.map((x) => x.t === "lift" ? sessionCard(x.s) : cardioCard(x.c)).join("") : "";
   }
   function sessionCard(s) {
-    const pills = (s.logged || []).map((x) => `<span class="pill">${round(x.weight)}${s.perHand ? "/h" : ""}×${x.reps}${x.rir != null ? ` @${x.rir}` : ""}</span>`).join("");
+    const nonLb = s.unitLabel && s.unitLabel !== "lb";
+    const suffix = nonLb ? ` ${esc(s.unitLabel)}` : (s.perHand ? "/h" : "");
+    const pills = (s.logged || []).map((x) => `<span class="pill">${round(x.weight)}${suffix}×${x.reps}${x.rir != null ? ` @${x.rir}` : ""}</span>`).join("");
     const e = Obs.sessionE1rm(s);
     const pr = prIds.has(s.id) ? ` <span class="pill pr">PR</span>` : "";
     return `<div class="session"><div class="session-head"><span class="name">${esc(s.name)}${pr}</span><span class="date">${fmtDate(s.date)}</span></div>` +
-      `<div class="session-sets">${pills}</div><div class="session-meta"><span>Vol ${round(Obs.sessionVolume(s))} lb</span>${e ? `<span>e1RM ${r1(e)} lb</span>` : ""}</div></div>`;
+      `<div class="session-sets">${pills}</div><div class="session-meta">${nonLb ? "" : `<span>Vol ${round(Obs.sessionVolume(s))} lb</span>`}${e ? `<span>e1RM ${r1(e)} lb</span>` : ""}</div></div>`;
   }
   function cardioCard(c) {
     return `<div class="session"><div class="session-head"><span class="name">🫀 ${esc(c.modality)}</span><span class="date">${fmtDate(c.date)}</span></div>` +
@@ -1007,7 +1077,7 @@
     const meals = Store.mealsToday().slice().reverse();
     $("#todayMeals").innerHTML = meals.length
       ? meals.map((m) => `<div class="meal-row"><div class="mr-body"><div class="mr-name">${esc(m.name)}</div>` +
-        `<div class="mr-macros">${m.calories} cal · ${m.protein}p · ${m.carbs}c · ${m.fat}f</div></div>` +
+        `<div class="mr-macros">${new Date(m.date).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} · ${m.calories} cal · ${m.protein}p · ${m.carbs}c · ${m.fat}f</div></div>` +
         `<button class="mr-del" data-mealdel="${m.id}">✕</button></div>`).join("")
       : `<p class="empty">Nothing logged today. Snap your next meal.</p>`;
     $$("#todayMeals [data-mealdel]").forEach((b) => b.addEventListener("click", () => { Store.deleteMeal(b.dataset.mealdel); renderFood(); renderNutriLine(); }));

@@ -36,6 +36,7 @@ const Brain = (function () {
     workingSets: { type: "array", items: SET },
     estimatedOneRepMax: { type: "number" },
     restSeconds: { type: "integer" },
+    unitLabel: { type: "string", description: "'lb' normally. If the machine uses a numbered stack / non-lb increments (known from athlete notes or their adjustNote), the unit to prescribe in, e.g. 'level' or 'plate #'." },
     cues: { type: "array", items: { type: "string" } },
   };
   const COACH_SCHEMA = {
@@ -173,9 +174,16 @@ const Brain = (function () {
     "Respect activeNiggles: never program into a flagged joint; prefer swaps and note it. During a deficit, protect " +
     "the key lifts; if dietPhase says deficit and lifts are sliding, bias volume down, intensity maintained. " +
     "Deload week (block.phase=deload): everything light and crisp, RIR 3-4.\n\n" +
-    "NUTRITION CONTEXT: the context includes nutrition — AI-set targets, today's logged intake, 7-day averages and " +
-    "logging adherence, recent meals, and free-form foodNotes (likes/dislikes/allergies). Use it: if protein is behind " +
-    "today or intake is chronically under/over target, say so where relevant.";
+    "NUTRITION CONTEXT: the context includes nutrition — AI-set targets, today's logged intake (with meal times), 7-day " +
+    "averages and logging adherence, recent meals, and free-form foodNotes (likes/dislikes/allergies). Use it: if protein " +
+    "is behind today or intake is chronically under/over target, say so where relevant.\n\n" +
+    "TIME AWARENESS: context.now carries the CURRENT date, day of week, and local time in the athlete's timezone " +
+    "(America/Vancouver — Pacific). Every history item is dated (sessions carry dayOfWeek + daysAgo; today's meals carry " +
+    "times). Reason with real time: notice gaps and missed days ('you haven't trained since Tuesday — 4 days'), late-day " +
+    "protein deficits, whether a lift was hit earlier TODAY, and where they are in the training week. Never guess the date.\n\n" +
+    "PERMANENT MEMORY: context.memory contains lifetime stats, an index of EVERY lift ever trained (allLiftsEverTrained: " +
+    "count, first/last date, best e1RM), weekly rollups, and the career summary of past blocks. Old history is never " +
+    "irrelevant — reference it when useful ('you benched 205 back in March; you're past that now').";
 
   const FOOD_CORE =
     "You are also this athlete's nutrition coach, and your food philosophy is non-negotiable: DELICIOUS FIRST. " +
@@ -193,7 +201,15 @@ const Brain = (function () {
     "- feelerSet given: correct today's remaining prescription from it immediately.\n" +
     "- completedSets + remainingCount given: athlete is MID-EXERCISE. Return EXACTLY remainingCount working sets, adjusted from how the completed sets went. Do not repeat completed sets.\n" +
     "- readinessAdjust given (e.g. 'running ~8% below prediction today'): scale accordingly.\n" +
-    "- swapFor given: the athlete can't/won't do that exercise (reason included). Pick the best substitute for the SAME stimulus available with common gym equipment (respect their equipmentNotes), and prescribe it fully.\n" +
+    "- swapFor given: the athlete can't/won't do that exercise (reason included). If the reason names target equipment " +
+    "(e.g. 'give me the dumbbell version'), convert the SAME movement to that equipment with correctly re-derived loads " +
+    "(dumbbell total ≈ 80-90% of barbell; per-hand weights). Otherwise pick the best same-stimulus substitute. Respect equipmentNotes.\n" +
+    "- adjustNote given: direct feedback on YOUR current prescription for this exercise — obey it exactly and decisively. " +
+    "'First set too heavy' -> cut the load meaningfully. 'This machine is numbered 1-15, not pounds' -> re-prescribe in " +
+    "stack levels with unitLabel set (estimate the right level from context; levels are small integers). '3 sets not 4' -> 3 sets. " +
+    "Their word beats your estimate, always.\n" +
+    "- unitLabel: 'lb' unless the machine is known (athlete model / adjustNote) to use numbered increments — then prescribe " +
+    "whole stack levels and set unitLabel (e.g. 'level').\n" +
     "- timeboxMinutes given: fit the work to the time (fewer sets, antagonist supersets in cues, shorter rest).\n" +
     "- muscles: fractional hard-set credit per muscle (sum roughly 1.5-2.0 for compounds, 1.0-1.25 isolation) — this drives their volume ledger, be accurate.\n" +
     "- Rep ranges: hypertrophy 5-12 by movement (compounds lower, isolation higher), respect their goal notes.\n" +
@@ -206,8 +222,9 @@ const Brain = (function () {
     "sensible, working sets, muscles fractions, rest, 1-2 cues). timeboxMinutes given -> fit the session to it honestly.";
 
   const FOCUS_SYSTEM = CORE + "\n\n" +
-    "TASK: the athlete opened the app — tell them exactly what to train TODAY. Use the volume ledger vs weekly targets " +
-    "(what's underfed this week?), muscleFreshness, adherence patterns, block week, and readiness. If they've earned a " +
+    "TASK: the athlete opened the app — tell them exactly what to train TODAY. Use context.now + session dates to call " +
+    "out gaps plainly ('It's Friday — you haven't lifted since Tuesday, chest is overdue'). Use the volume ledger vs " +
+    "weekly targets (what's underfed this week?), muscleFreshness, adherence patterns, block week, and readiness. If they've earned a " +
     "rest day, say so (restDay=true). ALWAYS make the cardio call: they are a cardio novice on a recomp — low-friction " +
     "zone-2 only (incline walk, easy bike), progressed by minutes never intensity, scheduled after lifting or standalone, " +
     "never before legs; factor cardio.minutesThisWeek vs the current weekly cardio target. Be specific and punchy.";
@@ -228,7 +245,9 @@ const Brain = (function () {
     "7. CARDIO DOSE: next week's zone-2 minutes (novice-friendly progression; cut it if lifts sliding in deficit).\n" +
     "8. ATHLETE MODEL: rewrite the complete notebook — consolidate pendingCoachNotes, add this week's learnings (responder " +
     "patterns, RIR calibration, niggle status, what worked). Keep it dense, factual, under 400 words.\n" +
-    "9. weeklyRollup: compact factual memory of this week.\n" +
+    "9. weeklyRollup: compact factual memory of this week — it is your PERMANENT archive, so it must capture: sessions " +
+    "trained (count + days), key lifts and PRs with numbers, avg calories/protein logged and adherence, bodyweight trend, " +
+    "cardio minutes, and anything future-you needs to reconstruct this week.\n" +
     "The analysis must cite actual numbers from the data. No generic advice.";
 
   const MEAL_SYSTEM = CORE + "\n\n" +
@@ -314,6 +333,8 @@ const Brain = (function () {
       remainingCount: opts.remainingCount || null,
       readinessAdjust: opts.readinessAdjust || null,
       swapFor: opts.swapFor || null,
+      adjustNote: opts.adjustNote || null,
+      currentPrescription: opts.currentPrescription || null,
       timeboxMinutes: opts.timeboxMinutes || null,
     });
     const content = [];

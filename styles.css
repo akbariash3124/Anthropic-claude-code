@@ -314,6 +314,13 @@ textarea { background: var(--bg); border: 1px solid var(--line); color: var(--te
 .plates-line { font-size: 12.5px; color: var(--accent); margin: 4px 2px 8px; }
 .plates-btn { background: none; border: none; color: var(--muted); font-size: 12px; cursor: pointer; padding: 4px 2px; text-decoration: underline dotted; }
 
+/* equipment quick-swap */
+.eqswap { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; margin-top: 12px; }
+.eqswap > span { font-size: 11.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; font-weight: 700; }
+.eqswap .chip { padding: 6px 11px; font-size: 12.5px; }
+.regen.del { color: var(--bad); }
+.fixrow.adj { margin-top: 10px; }
+
 /* last-time block on exercise cards */
 .lastlog { background: var(--bg); border: 1px solid var(--line); border-radius: 11px; padding: 9px 12px; margin: 10px 0 2px; cursor: pointer; }
 .ll-head { font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 800; margin-bottom: 5px; }
